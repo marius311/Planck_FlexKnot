@@ -20,10 +20,10 @@ class camb_reio(SlikPlugin):
 
         #load eignmodes and smoothly transition the mode to Xe(z)=0 at high z
         #with a cosine window
-        self.z,_=loadtxt("camb_rpc/cosmomc/camb/xefid.dat").T
+        self.z,_=loadtxt("xefid.dat").T
         dl=20
         w=hstack([ones(len(self.z)-dl),(cos(pi*arange(dl)/(dl-1))+1)/2])
-        self.modes=loadtxt("camb_rpc/cosmomc/camb/xepcs.dat")[1:]*w
+        self.modes=loadtxt("xepcs.dat")[1:]*w
 
         #compute fiducial Xe around which we perturb
         cp=camb.set_params(As=1e-9)
