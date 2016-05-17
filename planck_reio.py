@@ -76,7 +76,8 @@ class planck(SlikPlugin):
         self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
 
         self.highl = clik(clik_file='plik_lite_v18_TT.clik')
-        self.lowl = clik(clik_file='lowl_SMW_70_dx11d_2014_10_03_v5c_Ap.clik')
+        self.lowlT = clik(clik_file='commander_rc2_v1.1_l2_29_B.clik')
+        self.lowlP = clik(clik_file='simlow_MA_EE_2_32_2016_03_31.clik')
 
         self.priors = get_plugin('likelihoods.priors')(self)
 
@@ -96,7 +97,7 @@ class planck(SlikPlugin):
         self.cosmo.As = exp(self.cosmo.logA)*1e-10
         self.cosmo.cosmomc_theta = self.cosmo.theta
         self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
-        if self.lowl: self.lowl.A_planck = self.calPlanck
+        if self.lowlT: self.lowlT.A_planck = self.calPlanck
 
         try:
             self.cls = self.get_cmb(**self.cosmo)
@@ -107,7 +108,8 @@ class planck(SlikPlugin):
         return lsum(
             lambda: self.priors(self),
             lambda: self.highl(self.cls),
-            lambda: self.lowl(self.cls) if self.lowl else 0
+            lambda: self.lowlT(self.cls),
+            lambda: self.lowlP(self.cls)
         )
 
 if __name__=='__main__':
