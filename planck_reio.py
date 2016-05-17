@@ -17,7 +17,7 @@ class camb_reio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu']
     
     def __init__(self,lmax=5000):
-        super(camb_reio,self).__init__(lmax=lmax)
+        super(self.__class__,self).__init__(lmax=lmax)
 
         #load eigenmodes and smoothly transition the mode to Xe(z)=0 at high z
         #with a cosine window
