@@ -2,12 +2,13 @@ from cosmoslik import *
 from numpy import *
 import os, os.path as osp
 from cosmoslik_plugins.likelihoods.clik import clik
+from cosmoslik.subprocess_plugins import SubprocessClassDied
 import argparse
 import camb
 
 param = param_shortcut('start','scale')
 
-
+@subprocess_class(auto_restart=True)
 class camb_reio(SlikPlugin):
     """
     CAMB with reionization eigenmodes
@@ -16,9 +17,9 @@ class camb_reio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu']
     
     def __init__(self,lmax=5000):
-        super(SlikPlugin,self).__init__(lmax=lmax)
+        super(camb_reio,self).__init__(lmax=lmax)
 
-        #load eignmodes and smoothly transition the mode to Xe(z)=0 at high z
+        #load eigenmodes and smoothly transition the mode to Xe(z)=0 at high z
         #with a cosine window
         self.z,_=loadtxt("xefid.dat").T
         dl=20
@@ -36,7 +37,7 @@ class camb_reio(SlikPlugin):
         cp=camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params})
         cp.k_eta_max_scalar=2*self.lmax
         cp.DoLensing=True
-        cp.NonLinear=2
+        cp.NonLinear=0
         if 'reiomodes' in params:
             self.xe=self.fidxe+sum([params['reiomodes']['mode%i'%i]*self.modes[i] 
                                     for i in range(95) if 'mode%i'%i in params['reiomodes']],axis=0)
@@ -81,10 +82,13 @@ class planck(SlikPlugin):
 
         self.sampler = get_plugin('samplers.metropolis_hastings')(
             self,
-            num_samples=1e6,
-            print_level=2,
+            num_samples=1e7,
+            print_level=3,
+            proposal_update_start=500,
+            mpi_comm_freq=10,
             output_file='chain',
             proposal_cov='planck_%s.covmat'%model,
+            output_extra_params=[('get_cmb.xe','(95,)d')]
        )
 
 
@@ -94,12 +98,16 @@ class planck(SlikPlugin):
         self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
         if self.lowl: self.lowl.A_planck = self.calPlanck
 
-        self.cls = self.get_cmb(**self.cosmo)
+        try:
+            self.cls = self.get_cmb(**self.cosmo)
+        except SubprocessClassDied as e:
+            print "Warning: "+str(e)
+            return inf
 
         return lsum(
             lambda: self.priors(self),
             lambda: self.highl(self.cls),
-            lambda: self.lowl(self.cls)
+            lambda: self.lowl(self.cls) if self.lowl else 0
         )
 
 if __name__=='__main__':
