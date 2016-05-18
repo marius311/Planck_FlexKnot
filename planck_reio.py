@@ -8,8 +8,8 @@ import camb
 
 param = param_shortcut('start','scale')
 
-@subprocess_class(auto_restart=True)
-class camb_reio(SlikPlugin):
+@subprocess_class
+class CambReio(SlikPlugin):
     """
     CAMB with reionization eigenmodes
     """
@@ -39,8 +39,8 @@ class camb_reio(SlikPlugin):
         cp.DoLensing=True
         cp.NonLinear=0
         if 'reiomodes' in params:
-            self.xe=self.fidxe+sum([params['reiomodes']['mode%i'%i]*self.modes[i] 
-                                    for i in range(95) if 'mode%i'%i in params['reiomodes']],axis=0)
+            self.xe=self.fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i] 
+                                   for i in range(95) if 'mode%i'%i in params['reiomodes'])
             cp.Reion.set_xe(1/(1+self.z),self.xe)
         r=self.results=camb.get_results(cp)
 
@@ -71,7 +71,7 @@ class planck(SlikPlugin):
             for i in range(nmodes):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.03)
 
-        self.get_cmb = camb_reio()
+        self.get_cmb = CambReio()
                 
         self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
 
