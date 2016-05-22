@@ -5,44 +5,45 @@ from cosmoslik_plugins.likelihoods.clik import clik
 from cosmoslik.subprocess_plugins import SubprocessClassDied
 import argparse
 import camb
+camb.ignore_fatal_errors.value = True
 
 param = param_shortcut('start','scale')
 
-@subprocess_class
+# @subprocess_class
 class CambReio(SlikPlugin):
     """
     CAMB with reionization eigenmodes
     """
-    
+
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu']
-    
+
     def __init__(self,lmax=5000):
         super(self.__class__,self).__init__(lmax=lmax)
 
         #load eigenmodes and smoothly transition the mode to Xe(z)=0 at high z
         #with a cosine window
-        self.z,_=loadtxt("xefid.dat").T
-        dl=20
-        w=hstack([ones(len(self.z)-dl),(cos(pi*arange(dl)/(dl-1))+1)/2])
-        self.modes=loadtxt("xepcs.dat")[1:]*w
+        self.z,_ = loadtxt("xefid.dat").T
+        dl = 20
+        w = hstack([ones(len(self.z)-dl),(cos(pi*arange(dl)/(dl-1))+1)/2])
+        self.modes = loadtxt("xepcs.dat")[1:]*w
 
         #compute fiducial Xe around which we perturb
-        cp=camb.set_params(As=1e-9)
+        cp = camb.set_params(As=1e-9)
         camb.get_background(cp)
-        self.fidxe=cp.Reion.get_xe(1/(1+self.z))
+        self.fidxe = cp.Reion.get_xe(1/(1+self.z))
 
 
     def __call__(self,**params):
 
-        cp=camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params})
-        cp.k_eta_max_scalar=2*self.lmax
-        cp.DoLensing=True
-        cp.NonLinear=0
+        cp = camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params})
+        cp.k_eta_max_scalar = 2*self.lmax
+        cp.DoLensing = True
+        cp.NonLinear = 0
         if 'reiomodes' in params:
-            self.xe=self.fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i] 
-                                   for i in range(95) if 'mode%i'%i in params['reiomodes'])
+            self.xe = self.fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i]
+                                     for i in range(95) if 'mode%i'%i in params['reiomodes'])
             cp.Reion.set_xe(1/(1+self.z),self.xe)
-        r=self.results=camb.get_results(cp)
+        r = self.results = camb.get_results(cp)
 
         return dict(zip(['cl_%s'%x for x in ['TT','EE','BB','TE']],
                         (cp.TCMB*1e6)**2*r.get_cmb_power_spectra(spectra=['total'])['total'].T))
@@ -61,7 +62,7 @@ class planck(SlikPlugin):
             ombh2 = param(0.02221,0.0002),
             omch2 = param(0.1203,0.002),
             theta = param(0.0104,0.00003),
-            pivot_scalar=0.05,
+            pivot_scalar = 0.05,
             mnu = 0.06,
         )
         self.cosmo.reiomodes = SlikDict()
@@ -69,27 +70,30 @@ class planck(SlikPlugin):
             self.cosmo.tau = param(0.085,0.01,min=0,gaussian_prior=(0.07,0.01))
         elif 'reiomodes' in model:
             for i in range(nmodes):
-                self.cosmo.reiomodes['mode%i'%i] = param(0,0.03)
+                self.cosmo.reiomodes['mode%i'%i] = param(0,0.005)
 
         self.get_cmb = CambReio()
-                
+
         self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
 
         self.highl = clik(clik_file='plik_lite_v18_TT.clik')
         self.lowlT = clik(clik_file='commander_rc2_v1.1_l2_29_B.clik')
-        self.lowlP = clik(clik_file='simlow_MA_EE_2_32_2016_03_31.clik')
+        self.lowlP = clik(clik_file='simlow_MA_EE_2_32_2016_03_31.clik',auto_reject_errors=True)
 
         self.priors = get_plugin('likelihoods.priors')(self)
 
+        run_id = [model]
+        if model=='lcdm_reiomodes': run_id.append('nmodes%i'%nmodes)
+
         self.sampler = get_plugin('samplers.metropolis_hastings')(
             self,
-            num_samples=1e7,
-            print_level=3,
-            proposal_update_start=500,
-            mpi_comm_freq=10,
-            output_file='chain',
-            proposal_cov='planck_%s.covmat'%model,
-            output_extra_params=[('get_cmb.xe','(95,)d')]
+            num_samples = 1e7,
+            print_level = 3,
+            proposal_update_start = 500,
+            mpi_comm_freq = 10,
+            output_file = 'chains/chain_'+'_'.join(run_id),
+            proposal_cov = 'planck_%s.covmat'%model,
+            output_extra_params = [('get_cmb.xe','(95,)d'),'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP']
        )
 
 
@@ -101,25 +105,26 @@ class planck(SlikPlugin):
 
         try:
             self.cls = self.get_cmb(**self.cosmo)
-        except SubprocessClassDied as e:
+        except Exception as e:
             print "Warning: "+str(e)
             return inf
 
-        return lsum(
-            lambda: self.priors(self),
-            lambda: self.highl(self.cls),
-            lambda: self.lowlT(self.cls),
-            lambda: self.lowlP(self.cls)
+        self.lnls = {}
+        return lsumk(self.lnls,
+            [('priors',lambda: self.priors(self)),
+             ('highl',lambda: self.highl(self.cls)),
+             ('lowlT',lambda: self.lowlT(self.cls)),
+             ('lowlP',lambda: self.lowlP(self.cls))]
         )
 
 if __name__=='__main__':
 
     parser = argparse.ArgumentParser(prog='planck_reio')
     parser.add_argument('--model', default='lcdm_tau', help='lcdm_[tau|reiomodes]')
+    parser.add_argument('--nmodes', default=5, type=int, help='number of reionization eigenmodes')
     args = parser.parse_args()
 
     assert args.model in ['lcdm_tau','lcdm_reiomodes']
 
-    p=Slik(planck(model=args.model))
+    p=Slik(planck(model=args.model,nmodes=args.nmodes))
     for _ in p.sample(): pass
-
