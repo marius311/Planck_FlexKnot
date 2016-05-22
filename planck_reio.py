@@ -49,7 +49,7 @@ class CambReio(SlikPlugin):
                         (cp.TCMB*1e6)**2*r.get_cmb_power_spectra(spectra=['total'])['total'].T))
 
 
-
+@SlikMain
 class planck(SlikPlugin):
 
     def __init__(self, model='lcdm_tau',nmodes=5):
@@ -103,13 +103,14 @@ class planck(SlikPlugin):
         self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
         if self.lowlT: self.lowlT.A_planck = self.calPlanck
 
+        self.lnls = {k:nan for k in ['priors','highl','lowlT','lowlP']}
+        
         try:
             self.cls = self.get_cmb(**self.cosmo)
         except Exception as e:
             print "Warning: "+str(e)
             return inf
 
-        self.lnls = {}
         return lsumk(self.lnls,
             [('priors',lambda: self.priors(self)),
              ('highl',lambda: self.highl(self.cls)),
