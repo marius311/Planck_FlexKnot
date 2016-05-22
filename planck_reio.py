@@ -15,10 +15,10 @@ class CambReio(SlikPlugin):
     CAMB with reionization eigenmodes
     """
 
-    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu']
+    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau']
 
     def __init__(self,lmax=5000):
-        super(self.__class__,self).__init__(lmax=lmax)
+        super(CambReio,self).__init__(lmax=lmax)
 
         #load eigenmodes and smoothly transition the mode to Xe(z)=0 at high z
         #with a cosine window
@@ -30,19 +30,21 @@ class CambReio(SlikPlugin):
         #compute fiducial Xe around which we perturb
         cp = camb.set_params(As=1e-9)
         camb.get_background(cp)
-        self.fidxe = cp.Reion.get_xe(1/(1+self.z))
+        self.fidxe = cp.Reion.get_xe(z=self.z)
 
 
     def __call__(self,**params):
 
-        cp = camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params})
+        cp = camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params if k in params})
         cp.k_eta_max_scalar = 2*self.lmax
         cp.DoLensing = True
         cp.NonLinear = 0
         if 'reiomodes' in params:
             self.xe = self.fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i]
                                      for i in range(95) if 'mode%i'%i in params['reiomodes'])
-            cp.Reion.set_xe(1/(1+self.z),self.xe)
+            cp.Reion.set_xe(z=self.z,xe=self.xe)
+        else:
+            self.xe = cp.Reion.get_xe(z=self.z)
         r = self.results = camb.get_results(cp)
 
         return dict(zip(['cl_%s'%x for x in ['TT','EE','BB','TE']],
@@ -65,14 +67,14 @@ class planck(SlikPlugin):
             pivot_scalar = 0.05,
             mnu = 0.06,
         )
-        self.cosmo.reiomodes = SlikDict()
         if 'tau' in model:
             self.cosmo.tau = param(0.085,0.01,min=0,gaussian_prior=(0.07,0.01))
         elif 'reiomodes' in model:
+            self.cosmo.reiomodes = SlikDict()
             for i in range(nmodes):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.005)
 
-        self.get_cmb = CambReio()
+        self.camb = CambReio()
 
         self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
 
@@ -93,7 +95,7 @@ class planck(SlikPlugin):
             mpi_comm_freq = 10,
             output_file = 'chains/chain_'+'_'.join(run_id),
             proposal_cov = 'planck_%s.covmat'%model,
-            output_extra_params = [('get_cmb.xe','(95,)d'),'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP']
+            output_extra_params = [('camb.xe','(95,)d'), 'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP']
        )
 
 
@@ -103,10 +105,10 @@ class planck(SlikPlugin):
         self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
         if self.lowlT: self.lowlT.A_planck = self.calPlanck
 
-        self.lnls = {k:nan for k in ['priors','highl','lowlT','lowlP']}
-        
+        self.lnls = SlikDict({k:nan for k in ['priors','highl','lowlT','lowlP']})
+
         try:
-            self.cls = self.get_cmb(**self.cosmo)
+            self.cls = self.camb(**self.cosmo)
         except Exception as e:
             print "Warning: "+str(e)
             return inf
