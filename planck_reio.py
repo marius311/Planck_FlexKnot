@@ -65,7 +65,7 @@ class planck(SlikPlugin):
             omch2 = param(0.1203,0.002),
             theta = param(0.0104,0.00003),
             pivot_scalar = 0.05,
-            mnu = 0.06,
+            mnu = param(0.06,0.1,min=0) if 'mnu' in model else 0.06
         )
         if 'tau' in model:
             self.cosmo.tau = param(0.085,0.01,min=0,gaussian_prior=(0.07,0.01))
@@ -85,7 +85,7 @@ class planck(SlikPlugin):
         self.priors = get_plugin('likelihoods.priors')(self)
 
         run_id = [model]
-        if model=='lcdm_reiomodes': run_id.append('nmodes%i'%nmodes)
+        if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
 
         self.sampler = get_plugin('samplers.metropolis_hastings')(
             self,
@@ -94,8 +94,9 @@ class planck(SlikPlugin):
             proposal_update_start = 500,
             mpi_comm_freq = 10,
             output_file = 'chains/chain_'+'_'.join(run_id),
-            proposal_cov = 'planck_%s.covmat'%model,
-            output_extra_params = [('camb.xe','(95,)d'), 'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP']
+            proposal_cov = args.covmat or 'planck_%s.covmat'%model,
+            output_extra_params = [('camb.xe','(95,)d'), 'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP',
+                                   ('clTT','(100,)d'),('clTE','(100,)d'),('clEE','(100,)d')]
        )
 
 
@@ -109,9 +110,16 @@ class planck(SlikPlugin):
 
         try:
             self.cls = self.camb(**self.cosmo)
+            if (any([any(isnan(x)) for x in self.cls.values()])
+                or any([any(x>1e5) for x in self.cls.values()])):
+                raise Exception("CAMB outputted crazy Cls")
         except Exception as e:
-            print "Warning: "+str(e)
+            print "Warning, rejecting step: "+str(e)
             return inf
+
+        self.clTT = self.cls['cl_TT'][:100]
+        self.clTE = self.cls['cl_TE'][:100]
+        self.clEE = self.cls['cl_EE'][:100]
 
         return lsumk(self.lnls,
             [('priors',lambda: self.priors(self)),
@@ -125,9 +133,10 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser(prog='planck_reio')
     parser.add_argument('--model', default='lcdm_tau', help='lcdm_[tau|reiomodes]')
     parser.add_argument('--nmodes', default=5, type=int, help='number of reionization eigenmodes')
+    parser.add_argument('--covmat',help='covmat file')
     args = parser.parse_args()
 
-    assert args.model in ['lcdm_tau','lcdm_reiomodes']
+    assert all([x in ['lcdm','mnu','tau','reiomodes'] for x in args.model.split('_')]), "Unrecognized model"
 
     p=Slik(planck(model=args.model,nmodes=args.nmodes))
     for _ in p.sample(): pass
