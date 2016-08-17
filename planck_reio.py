@@ -6,9 +6,7 @@ from cosmoslik.subprocess_plugins import SubprocessClassDied
 import argparse
 import camb
 camb.ignore_fatal_errors.value = True
-
-# from matplotlib.pyplot import ion, plot, draw
-# ion()
+camb.reionization.include_helium_fullreion.value = False
 
 param = param_shortcut('start','scale')
 
@@ -26,13 +24,8 @@ class CambReio(SlikPlugin):
         super(CambReio,self).__init__(lmax=lmax,DoLensing=DoLensing)
 
         #load eigenmodes
-        dat = loadtxt("myxepcs.dat")
+        dat = loadtxt("reiotau_xepcs.dat")
         self.z, self.modes = dat[0], dat[1:]
-
-        #compute fiducial Xe around which we perturb
-        cp = camb.set_params(As=1e-9)
-        camb.get_background(cp)
-        self.fidxe = cp.Reion.get_xe(z=self.z)
 
 
     def __call__(self,**params):
@@ -42,14 +35,22 @@ class CambReio(SlikPlugin):
         cp.DoLensing = self.DoLensing
         cp.NonLinear = 0
         if 'reiomodes' in params:
-            self.xe = self.fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i]
-                                     for i in range(95) if 'mode%i'%i in params['reiomodes'])
-            if any(self.xe<-1) or any(self.xe>2): raise BadXe()
-            # plot(self.z,self.xe)
-            # draw()
-            cp.Reion.set_xe(z=self.z,xe=self.xe)
+            camb.get_background(cp)
+            fidxe = cp.Reion.get_xe(z=self.z)
+            self.xe = fidxe+sum(params['reiomodes']['mode%i'%i]*self.modes[i]
+                                for i in range(95) if 'mode%i'%i in params['reiomodes'])
+            if any(self.xe<-0.5) or any(self.xe>1.5): raise BadXe()
+            cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=1e-3)
         else:
             self.xe = cp.Reion.get_xe(z=self.z)
+        
+        if args.plot:
+            cla()
+            plot(self.z,fidxe)
+            plot(self.z,self.xe)
+            ylim(-1,2)
+            draw()
+        
         self.xe = self.xe[::10] #thin to keep chain size down
         r = self.results = camb.get_results(cp)
 
@@ -60,7 +61,8 @@ class CambReio(SlikPlugin):
 @SlikMain
 class planck(SlikPlugin):
 
-    def __init__(self, model='lcdm_tau', only_lowp=False, nmodes=5, lowl='simlow'):
+    def __init__(self, model='lcdm_tau', only_lowp=False, nmodes=5, 
+                 lowl='simlow'):
 
         super(planck,self).__init__(**all_kw(locals()))
 
@@ -84,15 +86,23 @@ class planck(SlikPlugin):
                 mnu = param(0.06,0.1,min=0) if 'mnu' in model else 0.06,
                 ALens = param(1,0.02) if 'ALens' in model else 1
             )
+            
         if 'tau' in model:
-            self.cosmo.tau = param(0.085,0.01,min=0.04)
-        elif 'reiomodes' in model:
+            self.cosmo.tau = param(0.055,0.01,min=0.04,max=0.5)
+        else:
+            self.cosmo.tau = 0.055
+            
+        if 'reiomodes' in model:
             self.cosmo.reiomodes = SlikDict()
             for i in range(nmodes):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.005)
+        elif 'reioamps' in model:
+            self.cosmo.reioamps = SlikDict()
+            for i in range(nmodes):
+                self.cosmo.reioamps['mode%i'%i] = param(0,0.005)
 
-        self.camb = CambReio(lmax=200 if only_lowp else 5000,
-                             DoLensing=(not only_lowp))
+
+        self.camb = CambReio(lmax=200 if only_lowp else 5000, DoLensing=(not only_lowp))
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -118,15 +128,15 @@ class planck(SlikPlugin):
 
         self.sampler = get_plugin('samplers.metropolis_hastings')(
             self,
-            num_samples = 1e7,
-            print_level = 3,
-            proposal_update_start = 5000,
-            mpi_comm_freq = 10,
+            num_samples = 1e9,
+            print_level = 1,
+            proposal_update_start = 2000,
+            mpi_comm_freq = 50,
             output_file = 'chains/chain_'+'_'.join(run_id),
             proposal_cov = args.covmat or 'planck_%s.covmat'%model,
             output_extra_params = [('camb.xe','(103,)d'), 'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP',
                                    ('clTT','(100,)d'),('clTE','(100,)d'),('clEE','(100,)d'),
-                                   'cosmo.tau']
+                                   'cosmo.tau_out']
        )
 
 
@@ -153,7 +163,7 @@ class planck(SlikPlugin):
         self.clTT = self.cls['cl_TT'][:100]
         self.clTE = self.cls['cl_TE'][:100]
         self.clEE = self.cls['cl_EE'][:100]
-        if 'tau' not in self.cosmo: self.cosmo.tau = self.camb.results.get_tau()
+        self.cosmo.tau_out = self.camb.results.get_tau()
 
         return lsumk(self.lnls,
             [('priors',lambda: self.priors(self)),
@@ -170,7 +180,13 @@ if __name__=='__main__':
     parser.add_argument('--nmodes', default=5, type=int, help='number of reionization eigenmodes')
     parser.add_argument('--covmat',help='covmat file')
     parser.add_argument('--only_lowp', action='store_true')
+    parser.add_argument('--plot',action='store_true',help='show plot')
     args = parser.parse_args()
+
+    if args.plot:
+        from matplotlib.pyplot import ion, plot, draw, ylim, cla
+        ion()
+
 
     assert all([x in ['lcdm','mnu','tau','reiomodes','ALens'] for x in args.model.split('_')]), "Unrecognized model"
     assert args.lowl in ['simlow','bflike'], "Unrecognized lowl likelihood"
