@@ -16,13 +16,14 @@ class CambReio(SlikPlugin):
     """
 
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau']
+    z = linspace(0,50,1024)
 
     def __init__(self, modesfile, lmax=5000, DoLensing=True):
         super(CambReio,self).__init__(lmax=lmax,DoLensing=DoLensing)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
-        self.z, self.modes = dat[0], dat[1:]
+        self.z_modes, self.modes = dat[0], dat[1:]
 
 
     def __call__(self,**params):
@@ -33,8 +34,9 @@ class CambReio(SlikPlugin):
         if 'reiomodes' in params:
             camb.get_background(cp)
             self.xe_tau = cp.Reion.get_xe(z=self.z)
-            self.xe = self.xe_tau+sum(params['reiomodes']['mode%i'%i]*self.modes[i]
-                                for i in range(95) if 'mode%i'%i in params['reiomodes'])
+            dxe = sum(params['reiomodes']['mode%i'%i]*self.modes[i]
+                      for i in range(95) if 'mode%i'%i in params['reiomodes'])
+            self.xe = self.xe_tau + interp(self.z,self.z_modes,dxe)
             if any(self.xe<-0.5) or any(self.xe>1.5): raise BadXe()
             cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=1e-3)
         else:
@@ -44,7 +46,9 @@ class CambReio(SlikPlugin):
         self.xe = self.xe[::10] #thin to keep chain size down
         r = self.results = camb.get_results(cp)
         
-        return dict(zip(['TT','EE','BB','TE'],(cp.TCMB*1e6)**2*r.get_total_cls(self.lmax).T))
+        cl = dict(zip(['TT','EE','BB','TE'],(cp.TCMB*1e6)**2*r.get_total_cls(self.lmax).T))
+        cl['TB'] = cl['EB'] = zeros(self.lmax)
+        return cl
 
 
 @SlikMain
@@ -58,6 +62,7 @@ class planck(SlikPlugin):
                  lowl='simlow',
                  doplot=False,
                  sampler='mh',
+                 fidtau=0.055,
                  covmat=[]):
         super().__init__(**arguments())
         
@@ -90,15 +95,16 @@ class planck(SlikPlugin):
         if 'tau' in model:
             self.cosmo.tau = param(0.055,0.01,min=0.02,max=0.5)
         else:
-            self.cosmo.tau = 0.055
+            self.cosmo.tau = fidtau
             
         if 'reiomodes' in model:
             self.cosmo.reiomodes = SlikDict()
             for i in range(nmodes):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.005)
 
-        self.camb = CambReio(modesfile, lmax=200 if only_lowp else 5000, DoLensing=(not only_lowp))
-        
+        self.camb = CambReio(modesfile,
+                             lmax=200 if only_lowp else 5000,
+                             DoLensing=(not only_lowp))        
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -106,19 +112,32 @@ class planck(SlikPlugin):
             self.calPlanck = 1
 
         if not only_lowp:
-            self.highl = likelihoods.planck.clik(clik_file='plik_lite_v18_TT.clik')
-            self.lowlT = likelihoods.planck.clik(clik_file='commander_rc2_v1.1_l2_29_B.clik')
+            self.highl = likelihoods.planck.clik(
+                clik_file='plik_lite_v18_TT.clik'
+            )
             
         if lowl=='simlow':
-            self.lowlP = likelihoods.planck.clik(clik_file='simlow_MA_EE_2_32_2016_03_31.clik',auto_reject_errors=True)
+            self.lowlT = likelihoods.planck.clik(
+                clik_file='commander_rc2_v1.1_l2_29_B.clik'
+            )
+            self.lowlP = likelihoods.planck.clik(
+                clik_file='simlow_MA_EE_2_32_2016_03_31.clik',
+                auto_reject_errors=True
+            )
+        elif lowl=='bflike':
+            IQUspec = 'QU' if only_lowp else 'SMW'
+            self.lowlP = likelihoods.planck.clik(
+                clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
+                auto_reject_errors=True
+            )
         else:
-            self.lowlP = likelihoods.planck.clik(clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_QU_70_dx11d_2014_10_03_v5c_Ap.clik/',
-                              auto_reject_errors=True)
-
+            raise ValueError(lowl)
+            
         self.priors = likelihoods.priors(self)
 
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
+        if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
         if self.only_lowp: run_id.append('onlylowp')
         run_id.append(lowl)
         if sampler=='emcee': run_id.append('emcee')
@@ -191,7 +210,7 @@ class planck(SlikPlugin):
 
         return lsumk(self.lnls,
             [('priors',lambda: self.priors(self)),
-             ('highl',lambda: 0 if self.only_lowp else self.highl(self.cls)),
-             ('lowlT',lambda: 0 if self.only_lowp else self.lowlT(self.cls)),
+             ('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
+             ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
              ('lowlP',lambda: self.lowlP(self.cls))]
         )
