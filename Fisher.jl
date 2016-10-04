@@ -39,6 +39,8 @@ automatically aligned.
 module Fisher
 
 export FisherMatrix, stds, corr, with_fixed
+
+using NamedArrays
 import Base: +, show
 
 type FisherMatrix{Tvals,Tnames}
@@ -78,14 +80,15 @@ function show(io::IO, f::FisherMatrix)
     end
 end
 
+
 doc"""
-    corr(f::AbstractArray)
+    cov2corr{T}(f::AbstractArray{T<:Real,2})
     
-Get the correlation matrix for the given FisherMatrix
+Get covariance matrix from a correlation matrix.
 """
-function corr(f::AbstractArray)
-    m=copy(f)
-    n,n=size(m)
+function cov2corr{T<:Real}(f::AbstractArray{T,2})
+    m = copy(f)
+    n,n = size(m)
     for i in 1:n
         sm = sqrt(m[i,i])
         m[i,:] /= sm
@@ -93,7 +96,19 @@ function corr(f::AbstractArray)
     end
     m
 end
-corr(f::FisherMatrix) = corr(f.fish)
+
+
+doc"""
+    corr(f::FisherMatrix, params=nothing)
+    
+Get the correlation matrix for the given FisherMatrix. If params is given,
+return the correlation for only a particular subset of parameters. Note this
+means the Fisher matrix is first inverted and then the correlation is computed. 
+"""
+function corr(f::FisherMatrix, params=f.names)
+    ii = indexin(params,f.names)
+    NamedArray(cov2corr(inv(f.fish)[ii,ii]),(params,params),("p₁","p₂"))
+end
 
 
 doc"""
