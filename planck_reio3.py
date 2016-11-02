@@ -116,6 +116,7 @@ class planck(SlikPlugin):
                  doplot=False,
                  sampler='mh',
                  fidtau=0.055,
+                 no_clik=False,
                  covmat=[]):
         super().__init__(**arguments())
         
@@ -167,47 +168,49 @@ class planck(SlikPlugin):
         else:
             self.calPlanck = 1
 
-        if not only_lowp:
-            self.highl = likelihoods.planck.clik(
-                clik_file='plik_lite_v18_TT.clik'
-            )
-            
-        if lowl=='commander':
-            self.lowlT = likelihoods.planck.clik(
-                clik_file='commander_rc2_v1.1_l2_29_B.clik'
-            )
-        elif lowl=='simlow':
+        if not no_clik:
+
             if not only_lowp:
+                self.highl = likelihoods.planck.clik(
+                    clik_file='plik_lite_v18_TT.clik'
+                )
+                
+            if lowl=='commander':
                 self.lowlT = likelihoods.planck.clik(
                     clik_file='commander_rc2_v1.1_l2_29_B.clik'
                 )
-            self.lowlP = ClikCustomMDB(
-                clik_file='simlow_MA_EE_2_32_2016_03_31.clik',
-                mdb={"lmax": lowp_lmax} if lowp_lmax else None,
-                auto_reject_errors=True
-            )
-        elif lowl=='bflike':
-            if lowp_lmax is not None: raise ValueError("bflike lmax not implemented")
-            IQUspec = 'QU' if only_lowp else 'SMW'
-            self.lowlP = likelihoods.planck.clik(
-                clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
-                auto_reject_errors=True
-            )
-        elif lowl in ['cvlowp','simlowlike']:
-            p0 = {k:(v if isinstance(v,(float,int)) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
-            p0["cosmomc_theta"] = p0["theta"]
-            p0["As"] = exp(p0["logA"])*1e-10
-            clEEobs = self.camb(**p0)["EE"]
-            if lowl=='simlowlike':
-                l = arange(100)
-                nlEEobs = (0.0143/l + 0.000279846) * l**2 / (2*pi)
-                fsky = 0.5
+            elif lowl=='simlow':
+                if not only_lowp:
+                    self.lowlT = likelihoods.planck.clik(
+                        clik_file='commander_rc2_v1.1_l2_29_B.clik'
+                    )
+                self.lowlP = ClikCustomMDB(
+                    clik_file='simlow_MA_EE_2_32_2016_03_31.clik',
+                    mdb={"lmax": lowp_lmax} if lowp_lmax else None,
+                    auto_reject_errors=True
+                )
+            elif lowl=='bflike':
+                if lowp_lmax is not None: raise ValueError("bflike lmax not implemented")
+                IQUspec = 'QU' if only_lowp else 'SMW'
+                self.lowlP = likelihoods.planck.clik(
+                    clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
+                    auto_reject_errors=True
+                )
+            elif lowl in ['cvlowp','simlowlike']:
+                p0 = {k:(v if isinstance(v,(float,int)) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
+                p0["cosmomc_theta"] = p0["theta"]
+                p0["As"] = exp(p0["logA"])*1e-10
+                clEEobs = self.camb(**p0)["EE"]
+                if lowl=='simlowlike':
+                    l = arange(100)
+                    nlEEobs = (0.0143/l + 0.000279846) * l**2 / (2*pi)
+                    fsky = 0.5
+                else:
+                    nlEEobs = 0
+                    fsky = 1
+                self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,int(lowp_lmax) if lowp_lmax else 30))
             else:
-                nlEEobs = 0
-                fsky = 1
-            self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,int(lowp_lmax) if lowp_lmax else 30))
-        else:
-            raise ValueError(lowl)
+                raise ValueError(lowl)
             
         self.priors = likelihoods.priors(self)
 
