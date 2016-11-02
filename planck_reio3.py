@@ -1,8 +1,14 @@
-from cosmoslik import *
-from numpy import *
-import os, os.path as osp
 import argparse
+import os
+import os.path as osp
+from shutil import copytree, rmtree
+from tempfile import mkdtemp
+
 import camb
+from numpy import *
+
+from cosmoslik import *
+
 camb.ignore_fatal_errors.value = True
 camb.reionization.include_helium_fullreion.value = False
 
@@ -66,15 +72,47 @@ class CVLowP(SlikPlugin):
         return self.fsky*sum((2*self.l+1)/2*(log(clEEtot)+self.clEEobs_tot/clEEtot))
 
 
+class ClikCustomMDB(likelihoods.planck.clik):
+    
+    def __init__(self,*args,mdb=None,clik_file=None,**kwargs):
+        
+        if mdb:
+            tmpdir = mkdtemp()
+            new_clik_file = osp.join(tmpdir,clik_file)
+            copytree(clik_file, new_clik_file)
+            
+            mdb_file = osp.join(new_clik_file,"clik","lkl_0","_mdb")
+            with open(mdb_file) as f:
+                mdb_dat = [l.split() for l in f.readlines()]
+            
+            for k,v in mdb.items():
+                for l in mdb_dat:
+                    if l[0]==k:
+                        l[2]=str(v)
+                    
+            with open(mdb_file,"w") as f:
+                f.write("\n".join(" ".join(l) for l in mdb_dat)+"\n")
+        else:
+            tmpdir = None
+            new_clik_file = clik_file
+        
+        super().__init__(*args,clik_file=new_clik_file,**kwargs)
+        
+        if tmpdir: rmtree(tmpdir)
+    
+    
+
+
 @SlikMain
 class planck(SlikPlugin):
 
     def __init__(self, 
-                 modesfile="reiotau_xepcs.dat",
+                 modesfile="reiotau_xepcs_v3.dat",
                  model='lcdm_tau', 
                  only_lowp=False, 
                  nmodes=5, 
                  lowl='simlow',
+                 lowp_lmax=None,
                  doplot=False,
                  sampler='mh',
                  fidtau=0.055,
@@ -143,11 +181,13 @@ class planck(SlikPlugin):
                 self.lowlT = likelihoods.planck.clik(
                     clik_file='commander_rc2_v1.1_l2_29_B.clik'
                 )
-            self.lowlP = likelihoods.planck.clik(
+            self.lowlP = ClikCustomMDB(
                 clik_file='simlow_MA_EE_2_32_2016_03_31.clik',
+                mdb={"lmax": lowp_lmax} if lowp_lmax else None,
                 auto_reject_errors=True
             )
         elif lowl=='bflike':
+            if lowp_lmax is not None: raise ValueError("bflike lmax not implemented")
             IQUspec = 'QU' if only_lowp else 'SMW'
             self.lowlP = likelihoods.planck.clik(
                 clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
@@ -165,7 +205,7 @@ class planck(SlikPlugin):
             else:
                 nlEEobs = 0
                 fsky = 1
-            self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky)
+            self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,lowp_lmax))
         else:
             raise ValueError(lowl)
             
@@ -176,8 +216,10 @@ class planck(SlikPlugin):
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
         if self.only_lowp: run_id.append('onlylowp')
         run_id.append(lowl)
+        if lowp_lmax: run_id.append("lowplmax%s"%lowp_lmax)
         if sampler=='emcee': run_id.append('emcee')
         if modesfile!="reiotau_xepcs.dat": run_id.append(osp.splitext(modesfile)[0])
+        
 
         _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
         self.sampler = _sampler(
