@@ -194,7 +194,7 @@ class planck(SlikPlugin):
                 auto_reject_errors=True
             )
         elif lowl in ['cvlowp','simlowlike']:
-            p0 = {k:(v if isinstance(v,float) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
+            p0 = {k:(v if isinstance(v,(float,int)) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
             p0["cosmomc_theta"] = p0["theta"]
             p0["As"] = exp(p0["logA"])*1e-10
             clEEobs = self.camb(**p0)["EE"]
@@ -205,7 +205,7 @@ class planck(SlikPlugin):
             else:
                 nlEEobs = 0
                 fsky = 1
-            self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,lowp_lmax))
+            self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,int(lowp_lmax) if lowp_lmax else 30))
         else:
             raise ValueError(lowl)
             
