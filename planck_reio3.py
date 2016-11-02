@@ -208,7 +208,7 @@ class planck(SlikPlugin):
                 else:
                     nlEEobs = 0
                     fsky = 1
-                self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,int(lowp_lmax) if lowp_lmax else 30))
+                self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,(int(lowp_lmax) if lowp_lmax else 30)+1))
             else:
                 raise ValueError(lowl)
             
