@@ -122,7 +122,7 @@ class planck(SlikPlugin):
         
     
         assert all([x in ['lcdm','mnu','tau','reiomodes','ALens','fixA'] for x in model.split('_')]), "Unrecognized model"
-        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'], "Unrecognized lowl likelihood"
+        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander','simlowlikeclik'], "Unrecognized lowl likelihood"
 
 
         if only_lowp:
@@ -179,13 +179,13 @@ class planck(SlikPlugin):
                 self.lowlT = likelihoods.planck.clik(
                     clik_file='commander_rc2_v1.1_l2_29_B.clik'
                 )
-            elif lowl=='simlow':
+            elif lowl in ['simlow','simlowlikeclik']:
                 if not only_lowp:
                     self.lowlT = likelihoods.planck.clik(
                         clik_file='commander_rc2_v1.1_l2_29_B.clik'
                     )
                 self.lowlP = ClikCustomMDB(
-                    clik_file='simlow_MA_EE_2_32_2016_03_31.clik',
+                    clik_file=lowl.replace("clik","")+'_MA_EE_2_32_2016_03_31.clik',
                     mdb={"lmax": lowp_lmax} if lowp_lmax else None,
                     auto_reject_errors=True
                 )
