@@ -35,7 +35,7 @@ class CambReio(SlikPlugin):
         if mhprior:
             f = 1.08
             b = 0.15
-            self.xe_fid = ((f-b)*(1-tanh((self.z-8)/0.5))/2 + b) * ((1-tanh((self.z-27)/0.5))/2)
+            self.xe_fid = ((f-b)*(1-tanh((self.z-6)/0.5))/2 + b) * ((1-tanh((self.z-27)/0.5))/2)
             self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2 for x in [1,-1])
 
 
