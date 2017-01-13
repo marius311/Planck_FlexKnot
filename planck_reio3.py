@@ -3,6 +3,7 @@ import os
 import os.path as osp
 from shutil import copytree, rmtree
 from tempfile import mkdtemp
+import pickle
 
 import camb
 from numpy import *
@@ -56,7 +57,7 @@ class CambReio(SlikPlugin):
             
         # add in modes
         if 'reiomodes' in params:
-            m = array([params['reiomodes'].get('mode%i'%i,0) for i in range(95)])
+            m = array([params['reiomodes'].get('mode%i'%i,0) for i in range(len(self.modes))])
             
             if any(m!=0):
                 dxe = dot(m,self.modes)
@@ -129,10 +130,12 @@ class planck(SlikPlugin):
 
     def __init__(self, 
                  modesfile="reiotau_xepcs_v3.dat",
+                 undo_mode_prior='',
                  model='lcdm_tau', 
                  only_lowp=False, 
                  nmodes=5, 
                  lowl='simlow',
+                 tauprior='',
                  lowp_lmax=None,
                  doplot=False,
                  sampler='mh',
@@ -185,6 +188,9 @@ class planck(SlikPlugin):
                              lmax=200 if only_lowp else 5000,
                              DoLensing=(not only_lowp),
                              mhprior=mhprior)
+        if undo_mode_prior:
+            with open(self.undo_mode_prior,"rb") as f:
+                self.mode_prior = pickle.load(f)[self.nmodes]
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -237,6 +243,7 @@ class planck(SlikPlugin):
             
         self.priors = likelihoods.priors(self)
 
+        # generate the file name for this chain based on all the options set
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
@@ -247,8 +254,15 @@ class planck(SlikPlugin):
             run_id.append(lowl)
             if lowp_lmax: run_id.append("lowplmax%s"%lowp_lmax)
         if mhprior: run_id.append("mhprior")
+        if tauprior:
+            μ,σ = eval(tauprior)
+            self.priors.add_gaussian_prior('cosmo.tau_out',μ,σ)
+            run_id.append('taup%.3i%.3i'%(int(1e3*μ),int(1e3*σ)))
         if sampler=='emcee': run_id.append('emcee')
         if modesfile!="reiotau_xepcs.dat": run_id.append(osp.splitext(modesfile)[0])
+        if undo_mode_prior:
+            run_id.append("undo_"+undo_mode_prior.replace(modesfile.replace('.dat',''),'').replace('.dat','').strip('_'))
+            
         
 
         _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
@@ -258,7 +272,7 @@ class planck(SlikPlugin):
             output_file = 'chains/chain_'+'_'.join(run_id),
             cov_est = covmat,
             output_extra_params = [
-                'lnls.priors','lnls.highl','lnls.lowlT','lnls.lowlP',
+                'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_mode_prior',
                 # ('clTT','(100,)d'),('clTE','(100,)d'),('clEE','(100,)d'),('camb.xe','(103,)d'), 
                 'cosmo.tau_out','cosmo.H0'
             ]
@@ -290,7 +304,7 @@ class planck(SlikPlugin):
             if 'lowlP' in self: 
                 self.lowlP.A_planck = self.calPlanck
         
-        self.lnls = SlikDict({k:nan for k in ['priors','highl','lowlT','lowlP']})
+        self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_mode_prior']})
 
         try:
             self.cls = self.camb(**self.cosmo)
@@ -318,10 +332,9 @@ class planck(SlikPlugin):
         self.clEE = self.cls['EE'][:100]
         self.cosmo.tau_out = self.camb.results.get_tau()
         
-
         return lsumk(self.lnls,
-            [('priors',lambda: self.priors(self)),
-             ('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
+            [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
-             ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls))]
+             ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls)),
+             ('inv_mode_prior', lambda: log(max(3e-2,nan_to_num(self.mode_prior(self.cosmo.tau_out)))) if self.undo_mode_prior else 0)]
         )
