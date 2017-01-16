@@ -190,7 +190,7 @@ class planck(SlikPlugin):
                              mhprior=mhprior)
         if undo_mode_prior:
             with open(self.undo_mode_prior,"rb") as f:
-                self.mode_prior = pickle.load(f)[self.nmodes]
+                self.mode_prior = pickle.load(f).get(self.nmodes, lambda tau: 1)
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -331,7 +331,6 @@ class planck(SlikPlugin):
         self.clTE = self.cls['TE'][:100]
         self.clEE = self.cls['EE'][:100]
         self.cosmo.tau_out = self.camb.results.get_tau()
-        
         return lsumk(self.lnls,
             [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
