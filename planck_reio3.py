@@ -22,7 +22,7 @@ class CambReio(SlikPlugin):
     CAMB with reionization eigenmodes
     """
 
-    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau']
+    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens']
     z = linspace(0,50,1024)
 
     def __init__(self, modesfile, lmax=5000, DoLensing=True, mhprior=False):
