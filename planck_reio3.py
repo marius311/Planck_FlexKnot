@@ -25,8 +25,10 @@ class CambReio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens','nrun']
     z = linspace(0,50,1024)
 
-    def __init__(self, modesfile, lmax=5000, DoLensing=True, mhprior=False, gpprior=False, clip=False):
-        super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, clip=clip)
+    def __init__(self, modesfile, lmax=5000, DoLensing=True, 
+                 mhprior=False, gpprior=False, clip=False, hardxe=None):
+        super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
+                         clip=clip, hardxe=hardxe)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
@@ -67,7 +69,7 @@ class CambReio(SlikPlugin):
                 if self.mhprior:
                     if any(m < self.mminus) or any(m > self.mplus): raise BadXe()
                 else:
-                    if any(self.xe<-0.5) or any(self.xe>1.5): raise BadXe()
+                    if any(self.xe<self.hardxe[0]) or any(self.xe>self.hardxe[1]): raise BadXe()
                 
                 if self.gpprior:
                     if interp(6,self.z[::-1],self.xe[::-1]) < (0.99 * 1.08): raise BadXe()
@@ -152,10 +154,13 @@ class planck(SlikPlugin):
                  doplot=False,
                  sampler='mh',
                  mhprior=False,
+                 hardxe='(-0.5,1.5)',
                  clip=False,
                  fidtau=0.055,
                  no_clik=False,
                  covmat=[]):
+        
+        hardxe=eval(hardxe)
         super().__init__(**arguments())
         
     
@@ -204,7 +209,8 @@ class planck(SlikPlugin):
                              lmax=200 if only_lowp else 5000,
                              DoLensing=(not only_lowp),
                              mhprior=mhprior,
-                             clip=clip)
+                             clip=clip,
+                             hardxe=hardxe)
         if undo_mode_prior:
             with open(self.undo_mode_prior,"rb") as f:
                 self.mode_prior = pickle.load(f).get(self.nmodes, lambda tau: 1)
@@ -284,6 +290,8 @@ class planck(SlikPlugin):
             run_id.append("undo_"+undo_mode_prior.replace(modesfile.replace('.dat',''),'').replace('.dat','').strip('_'))
         if clip:
             run_id.append("clip")
+        if hardxe!=(-0.5,1.5):
+            run_id.append("hardxe%.3i%.3i"%(int(1e2*abs(hardxe[0])),int(1e2*hardxe[1])))
         
 
         _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
