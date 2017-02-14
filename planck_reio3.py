@@ -30,8 +30,10 @@ class CambReio(SlikPlugin):
 
         #load eigenmodes
         dat = loadtxt(modesfile)
-        self.z_modes, self.modes = dat[0], dat[1:]
-        self.Nz = len(self.z_modes)
+        z_modes, self.modes = dat[0], dat[1:]
+        # interpolate onto our z values
+        self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
+        self.Nz = len(self.z)
         
         if mhprior:
             f = 1.08
@@ -60,8 +62,7 @@ class CambReio(SlikPlugin):
             m = array([params['reiomodes'].get('mode%i'%i,0) for i in range(len(self.modes))])
             
             if any(m!=0):
-                dxe = dot(m,self.modes)
-                self.xe = self.xe_fid + interp(self.z,self.z_modes,dxe)
+                self.xe = self.xe_fid + dot(m,self.modes)
                 
                 if self.mhprior:
                     if any(m < self.mminus) or any(m > self.mplus): raise BadXe()
