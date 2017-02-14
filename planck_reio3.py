@@ -314,7 +314,7 @@ class planck(SlikPlugin):
         
 
 
-    def __call__(self):
+    def __call__(self, background_only=False):
         try:
             
             self.cosmo.cosmomc_theta = self.cosmo.theta
@@ -334,7 +334,7 @@ class planck(SlikPlugin):
             self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_mode_prior']})
 
                 
-            self.cls = self.camb(**self.cosmo)
+            self.cls = self.camb(background_only=background_only,**self.cosmo)
             
             self.cosmo.H0 = self.camb.H0
             
@@ -354,11 +354,14 @@ class planck(SlikPlugin):
             if not isinstance(e,BadXe):
                 print("Warning, rejecting step: "+str(e))
             return inf
+            
+        self.cosmo.tau_out = self.camb.results.get_tau()
 
+        if background_only: return 0
+        
         self.clTT = self.cls['TT'][:100]
         self.clTE = self.cls['TE'][:100]
         self.clEE = self.cls['EE'][:100]
-        self.cosmo.tau_out = self.camb.results.get_tau()
         return lsumk(self.lnls,
             [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
