@@ -22,11 +22,11 @@ class CambReio(SlikPlugin):
     CAMB with reionization eigenmodes
     """
 
-    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens']
+    camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens','nrun']
     z = linspace(0,50,1024)
 
-    def __init__(self, modesfile, lmax=5000, DoLensing=True, mhprior=False):
-        super(CambReio,self).__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior)
+    def __init__(self, modesfile, lmax=5000, DoLensing=True, mhprior=False, gpprior=False, clip=False):
+        super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, clip=clip)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
@@ -40,9 +40,9 @@ class CambReio(SlikPlugin):
             self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2 for x in [1,-1])
 
 
-    def __call__(self,**params):
+    def __call__(self,background_only=False,**params):
         
-        cp = camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params if k in params})
+        cp = self.cp = camb.set_params(lmax=self.lmax,H0=None,**{k:params[k] for k in self.camb_params if k in params})
         cp.k_eta_max_scalar = 2*self.lmax
         cp.DoLensing = self.DoLensing
         cp.NonLinear = 0
@@ -68,16 +68,26 @@ class CambReio(SlikPlugin):
                 else:
                     if any(self.xe<-0.5) or any(self.xe>1.5): raise BadXe()
                 
-                cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=1e-3)
+                if self.gpprior:
+                    if interp(6,self.z[::-1],self.xe[::-1]) < (0.99 * 1.08): raise BadXe()
+                
+                if self.clip:
+                    self.xe = clip(self.xe,0,1.17)
+                
+                cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=1e-2)
             
         
         
         self.xe = self.xe[::10] #thin to keep chain size down
-        r = self.results = camb.get_results(cp)
         
-        cl = dict(zip(['TT','EE','BB','TE'],(cp.TCMB*1e6)**2*r.get_total_cls(self.lmax).T))
-        cl['TB'] = cl['EB'] = zeros(self.lmax)
-        return cl
+        if background_only:
+            r = self.results = camb.get_background(cp)
+            return r
+        else:
+            r = self.results = camb.get_results(cp)
+            cl = dict(zip(['TT','EE','BB','TE'],(cp.TCMB*1e6)**2*r.get_total_cls(self.lmax).T))
+            cl['TB'] = cl['EB'] = zeros(self.lmax)
+            return cl
 
 
 class CVLowP(SlikPlugin):
@@ -136,17 +146,19 @@ class planck(SlikPlugin):
                  nmodes=5, 
                  lowl='simlow',
                  tauprior='',
+                 gpprior=False,
                  lowp_lmax=None,
                  doplot=False,
                  sampler='mh',
                  mhprior=False,
+                 clip=False,
                  fidtau=0.055,
                  no_clik=False,
                  covmat=[]):
         super().__init__(**arguments())
         
     
-        assert all([x in ['lcdm','mnu','tau','reiomodes','ALens','fixA'] for x in model.split('_')]), "Unrecognized model"
+        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
         assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl, "Unrecognized lowl likelihood"
 
 
@@ -169,7 +181,10 @@ class planck(SlikPlugin):
                 pivot_scalar = 0.05,
             )
             
-        if 'fixA' in model:
+        if 'nrun' in model:
+            self.cosmo.nrun = param(0,0.01)
+            
+        if 'fixA' in model or 'fixclamp' in model:
             self.cosmo.logA = 3.108
         else:
             self.cosmo.logA = param(3.108,0.03,min=2.8,max=3.4)
@@ -187,7 +202,8 @@ class planck(SlikPlugin):
         self.camb = CambReio(modesfile,
                              lmax=200 if only_lowp else 5000,
                              DoLensing=(not only_lowp),
-                             mhprior=mhprior)
+                             mhprior=mhprior,
+                             clip=clip)
         if undo_mode_prior:
             with open(self.undo_mode_prior,"rb") as f:
                 self.mode_prior = pickle.load(f).get(self.nmodes, lambda tau: 1)
@@ -243,6 +259,8 @@ class planck(SlikPlugin):
             
         self.priors = likelihoods.priors(self)
 
+        self.priors.add_uniform_prior('cosmo.tau_out',0,0.1)
+
         # generate the file name for this chain based on all the options set
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
@@ -254,6 +272,7 @@ class planck(SlikPlugin):
             run_id.append(lowl)
             if lowp_lmax: run_id.append("lowplmax%s"%lowp_lmax)
         if mhprior: run_id.append("mhprior")
+        if gpprior: run_id.append("gpprior")
         if tauprior:
             μ,σ = eval(tauprior)
             self.priors.add_gaussian_prior('cosmo.tau_out',μ,σ)
@@ -262,7 +281,8 @@ class planck(SlikPlugin):
         if modesfile!="reiotau_xepcs.dat": run_id.append(osp.splitext(modesfile)[0])
         if undo_mode_prior:
             run_id.append("undo_"+undo_mode_prior.replace(modesfile.replace('.dat',''),'').replace('.dat','').strip('_'))
-            
+        if clip:
+            run_id.append("clip")
         
 
         _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
@@ -295,19 +315,27 @@ class planck(SlikPlugin):
 
 
     def __call__(self):
-        self.cosmo.As = exp(self.cosmo.logA)*1e-10
-        self.cosmo.cosmomc_theta = self.cosmo.theta
-        if not self.no_clik:
-            if not self.only_lowp:
-                self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
-                if self.get('lowlT'): self.lowlT.A_planck = self.calPlanck
-            if 'lowlP' in self: 
-                self.lowlP.A_planck = self.calPlanck
-        
-        self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_mode_prior']})
-
         try:
+            
+            self.cosmo.cosmomc_theta = self.cosmo.theta
+            if 'fixclamp' in self.model:
+                tau = self.camb(background_only=True,**self.cosmo).get_tau()
+                self.cosmo.logA = log(1.881*10) + 2*tau
+                
+            self.cosmo.As = exp(self.cosmo.logA)*1e-10
+
+            if not self.no_clik:
+                if not self.only_lowp:
+                    self.highl.A_Planck = self.highl.calPlanck = self.calPlanck
+                    if self.get('lowlT'): self.lowlT.A_planck = self.calPlanck
+                if 'lowlP' in self: 
+                    self.lowlP.A_planck = self.calPlanck
+            
+            self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_mode_prior']})
+
+                
             self.cls = self.camb(**self.cosmo)
+            
             self.cosmo.H0 = self.camb.H0
             
             if self.doplot:
@@ -315,7 +343,7 @@ class planck(SlikPlugin):
                 ion()
                 cla()
                 plot(self.camb.z,self.camb.xe_fid)
-                plot(self.camb.z[::10],self.camb.xe,marker=".")
+                plot(self.camb.z,self.camb.cp.Reion.get_xe(z=self.camb.z),marker=".")
                 ylim(-1,2)
                 gcf().canvas.draw() 
             
