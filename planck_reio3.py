@@ -76,7 +76,7 @@ class CambReio(SlikPlugin):
                     if any(self.xe<self.hardxe[0]) or any(self.xe>self.hardxe[1]): raise BadXe()
                 
                 if self.gpprior:
-                    if interp(6,self.z[::-1],self.xe[::-1]) < (0.99 * 1.08): raise BadXe()
+                    if interp(6,self.z,self.xe) < (0.99 * 1.08): raise BadXe()
                 
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
@@ -218,6 +218,7 @@ class planck(SlikPlugin):
                              mhprior=mhprior,
                              mhfid=mhfid,
                              mhfidbase=mhfidbase,
+                             gpprior=gpprior,
                              clip=clip,
                              hardxe=hardxe)
         if undo_mode_prior:
