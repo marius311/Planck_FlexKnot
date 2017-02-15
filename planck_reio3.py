@@ -36,12 +36,13 @@ class CambReio(SlikPlugin):
         # interpolate onto our z values
         self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
         self.Nz = len(self.z)
+        α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
         
         if mhprior:
             f = 1.08
             b = 0.15
-            self.xe_fid = ((f-b)*(1-tanh((self.z-6)/0.5))/2 + b) * ((1-tanh((self.z-27)/0.5))/2)
-            self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2 for x in [1,-1])
+            self.xe_fid = ((f-b)*(1-tanh((self.z-6)/0.5))/2 + b) * ((1-tanh((self.z-30)/0.5))/2)
+            self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2/α for x in [1,-1])
 
 
     def __call__(self,background_only=False,**params):
