@@ -26,9 +26,9 @@ class CambReio(SlikPlugin):
     z = linspace(0,50,1024)
 
     def __init__(self, modesfile, lmax=5000, DoLensing=True, 
-                 mhprior=False, gpprior=False, clip=False, hardxe=None):
+                 mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15):
         super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
-                         clip=clip, hardxe=hardxe)
+                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
@@ -38,10 +38,12 @@ class CambReio(SlikPlugin):
         self.Nz = len(self.z)
         α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
         
-        if mhprior:
-            f = 1.08
-            b = 0.15
+        if mhfid:
+            f, b = 1.08, self.mhfidbase
             self.xe_fid = ((f-b)*(1-tanh((self.z-6)/0.5))/2 + b) * ((1-tanh((self.z-30)/0.5))/2)
+        
+        if mhprior:
+            assert mhfid, "--mhfid must be set if --mhprior is"
             self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2/α for x in [1,-1])
 
 
@@ -54,7 +56,7 @@ class CambReio(SlikPlugin):
         self.H0 = cp.H0
         
         # get fiducial 
-        if self.mhprior:
+        if self.mhfid:
             self.xe = self.xe_fid
         else:
             camb.get_background(cp)
@@ -68,8 +70,9 @@ class CambReio(SlikPlugin):
                 self.xe = self.xe_fid + dot(m,self.modes)
                 
                 if self.mhprior:
-                    if any(m < self.mminus) or any(m > self.mplus): raise BadXe()
-                else:
+                    if any(m < self.mhprior*self.mminus) or any(m > self.mhprior*self.mplus): raise BadXe()
+                
+                if self.hardxe:
                     if any(self.xe<self.hardxe[0]) or any(self.xe>self.hardxe[1]): raise BadXe()
                 
                 if self.gpprior:
@@ -78,11 +81,11 @@ class CambReio(SlikPlugin):
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
                 
-                cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=1e-2)
+                cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=0.3)
             
         
         
-        self.xe = self.xe[::10] #thin to keep chain size down
+        # self.xe = self.xe[::10] #thin to keep chain size down
         
         if background_only:
             r = self.results = camb.get_background(cp)
@@ -153,8 +156,11 @@ class planck(SlikPlugin):
                  gpprior=False,
                  lowp_lmax=None,
                  doplot=False,
+                 noplotbadxe=False,
                  sampler='mh',
-                 mhprior=False,
+                 mhprior=0,
+                 mhfid=False,
+                 mhfidbase=0.15,
                  hardxe='(-0.5,1.5)',
                  clip=False,
                  fidtau=0.055,
@@ -204,12 +210,14 @@ class planck(SlikPlugin):
         if 'reiomodes' in model:
             self.cosmo.reiomodes = SlikDict()
             for i in range(nmodes):
-                self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if mhprior else 3)
+                self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
 
         self.camb = CambReio(modesfile,
                              lmax=200 if only_lowp else 5000,
                              DoLensing=(not only_lowp),
                              mhprior=mhprior,
+                             mhfid=mhfid,
+                             mhfidbase=mhfidbase,
                              clip=clip,
                              hardxe=hardxe)
         if undo_mode_prior:
@@ -267,7 +275,7 @@ class planck(SlikPlugin):
             
         self.priors = likelihoods.priors(self)
 
-        self.priors.add_uniform_prior('cosmo.tau_out',0,0.1)
+        # self.priors.add_uniform_prior('cosmo.tau_out',0,0.1)
 
         # generate the file name for this chain based on all the options set
         run_id = [model]
@@ -279,7 +287,9 @@ class planck(SlikPlugin):
             if self.only_lowp: run_id.append('onlylowp')
             run_id.append(lowl)
             if lowp_lmax: run_id.append("lowplmax%s"%lowp_lmax)
-        if mhprior: run_id.append("mhprior")
+        if mhprior: run_id.append("mhprior"+(str(mhprior) if mhprior!=1 else ""))
+        if mhfid: run_id.append("mhfid")
+        if mhfidbase!=0.15: run_id.append("mhfidbase%.3i"%(int(1e2*mhfidbase)))
         if gpprior: run_id.append("gpprior")
         if tauprior:
             μ,σ = eval(tauprior)
@@ -348,22 +358,28 @@ class planck(SlikPlugin):
             
             self.cosmo.H0 = self.camb.H0
             
-            if self.doplot:
-                from matplotlib.pyplot import ion, plot, ylim, cla, gcf
-                ion()
-                cla()
-                plot(self.camb.z,self.camb.xe_fid)
-                plot(self.camb.z,self.camb.cp.Reion.get_xe(z=self.camb.z),marker=".")
-                ylim(-1,2)
-                gcf().canvas.draw() 
             
             if (any([any(isnan(x)) for x in list(self.cls.values())])
                 or any([any(x>1e5) for x in list(self.cls.values())])):
                 raise Exception("CAMB outputted crazy Cls")
+            
+            badxe = False
         except Exception as e:
-            if not isinstance(e,BadXe):
+            badxe = isinstance(e,BadXe)
+            if not badxe:
                 print("Warning, rejecting step: "+str(e))
             return inf
+        finally:
+            if self.doplot and (not self.noplotbadxe or not badxe):
+                from matplotlib.pyplot import ion, plot, ylim, cla, gcf
+                ion()
+                cla()
+                plot(self.camb.z,self.camb.xe_fid)
+                plot(self.camb.z,self.camb.xe,marker='.')
+                plot(self.camb.z,self.camb.cp.Reion.get_xe(z=self.camb.z),marker=".")
+                ylim(-1,2)
+                gcf().canvas.draw() 
+            
             
         self.cosmo.tau_out = self.camb.results.get_tau()
 
