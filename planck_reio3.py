@@ -40,7 +40,7 @@ class CambReio(SlikPlugin):
         
         if mhfid:
             f, b = 1.08, self.mhfidbase
-            self.xe_fid = ((f-b)*(1-tanh((self.z-6)/0.5))/2 + b) * ((1-tanh((self.z-30)/0.5))/2)
+            self.xe_fid = ((f-b)*(1-tanh((self.z-6.25)/0.1))/2 + b) * ((1-tanh((self.z-30)/0.1))/2)
         
         if mhprior:
             assert mhfid, "--mhfid must be set if --mhprior is"
@@ -81,11 +81,10 @@ class CambReio(SlikPlugin):
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
                 
-                cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=0.3)
+                self.xe = cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=0.3)
             
         
-        
-        # self.xe = self.xe[::10] #thin to keep chain size down
+        self.xe_thin = self.xe[::10]
         
         if background_only:
             r = self.results = camb.get_background(cp)
@@ -155,6 +154,7 @@ class planck(SlikPlugin):
                  tauprior='',
                  gpprior=False,
                  lowp_lmax=None,
+                 lowp_lmin=None,
                  doplot=False,
                  noplotbadxe=False,
                  sampler='mh',
@@ -165,6 +165,7 @@ class planck(SlikPlugin):
                  clip=False,
                  fidtau=0.055,
                  no_clik=False,
+                 extras='',
                  covmat=[]):
         
         hardxe=eval(hardxe)
@@ -211,6 +212,8 @@ class planck(SlikPlugin):
             self.cosmo.reiomodes = SlikDict()
             for i in range(nmodes):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
+                if 'binmodes' in modesfile:
+                    self.cosmo.reiomodes['mode%i'%i].min = 0
 
         self.camb = CambReio(modesfile,
                              lmax=200 if only_lowp else 5000,
@@ -246,19 +249,23 @@ class planck(SlikPlugin):
                     self.lowlT = likelihoods.planck.clik(
                         clik_file='commander_rc2_v1.1_l2_29_B.clik'
                     )
+                mdb={}
+                if lowp_lmax: mdb['lmax'] = lowp_lmax
+                if lowp_lmin: mdb['lmin'] = lowp_lmin
                 self.lowlP = ClikCustomMDB(
                     clik_file=lowl.replace("clik","")+'_MA_EE_2_32_2016_03_31.clik',
-                    mdb={"lmax": lowp_lmax} if lowp_lmax else None,
+                    mdb=mdb,
                     auto_reject_errors=True
                 )
             elif lowl=='bflike':
-                if lowp_lmax is not None: raise ValueError("bflike lmax not implemented")
+                if lowp_lmax or lowp_lmin: raise ValueError("bflike lmax not implemented")
                 IQUspec = 'QU' if only_lowp else 'SMW'
                 self.lowlP = likelihoods.planck.clik(
                     clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
                     auto_reject_errors=True
                 )
             elif lowl in ['cvlowp','simlowlike']:
+                assert not lowp_lmin, "not implemented"
                 p0 = {k:(v if isinstance(v,(float,int)) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
                 p0["cosmomc_theta"] = p0["theta"]
                 p0["As"] = exp(p0["logA"])*1e-10
@@ -288,6 +295,7 @@ class planck(SlikPlugin):
             if self.only_lowp: run_id.append('onlylowp')
             run_id.append(lowl)
             if lowp_lmax: run_id.append("lowplmax%s"%lowp_lmax)
+            if lowp_lmin: run_id.append("lowplmin%s"%lowp_lmin)
         if mhprior: run_id.append("mhprior"+(str(mhprior) if mhprior!=1 else ""))
         if mhfid: run_id.append("mhfid")
         if mhfidbase!=0.15: run_id.append("mhfidbase%.3i"%(int(1e2*mhfidbase)))
@@ -306,6 +314,10 @@ class planck(SlikPlugin):
             run_id.append("hardxe%.3i%.3i"%(int(1e2*abs(hardxe[0])),int(1e2*hardxe[1])))
         
 
+        extra_format = {'clTT':('clTT','(100,)d'),
+                        'clTE':('clTE','(100,)d'),
+                        'clEE':('clEE','(100,)d'),
+                        'xe':('camb.xe_thin','(103,)d')}
         _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
         self.sampler = _sampler(
             self,
@@ -314,9 +326,8 @@ class planck(SlikPlugin):
             cov_est = covmat,
             output_extra_params = [
                 'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_mode_prior',
-                # ('clTT','(100,)d'),('clTE','(100,)d'),('clEE','(100,)d'),('camb.xe','(103,)d'), 
                 'cosmo.tau_out','cosmo.H0'
-            ]
+            ] + ([extra_format[e] for e in extras.split(',')] if extras else [])
         )
         if sampler=='mh':
             self.sampler.update(dict(
