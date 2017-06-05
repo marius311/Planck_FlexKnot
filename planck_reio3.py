@@ -3,6 +3,7 @@ import os
 import os.path as osp
 from shutil import copytree, rmtree
 from tempfile import mkdtemp
+from scipy.optimize import brentq
 import pickle
 
 import camb
@@ -25,10 +26,10 @@ class CambReio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens','nrun']
     z = linspace(0,50,1024)
 
-    def __init__(self, modesfile, lmax=5000, DoLensing=True, 
+    def __init__(self, modesfile, lmax=5000, DoLensing=True, reiomodel="tanh",
                  mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15):
         super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
-                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase)
+                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase, reiomodel=reiomodel)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
@@ -59,8 +60,21 @@ class CambReio(SlikPlugin):
         if self.mhfid:
             self.xe = self.xe_fid
         else:
-            camb.get_background(cp)
-            self.xe = self.xe_fid = cp.Reion.get_xe(z=self.z)
+            if self.reiomodel=="tanh":
+                camb.get_background(cp)
+                self.xe = self.xe_fid = cp.Reion.get_xe(z=self.z)
+            elif self.reiomodel=="exp":
+                def dtau(zreio):
+                    f = 1.08
+                    zp = 6.1
+                    xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
+                    xe[self.z<zp] = f
+                    self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=1e-3)
+                    return camb.get_background(cp).get_tau() - params["tau"]
+                dtau(brentq(dtau,6.2,10,rtol=1e-3))
+            else:
+                raise ValueError("Unrecognized reionization model '%s'"%self.reiomodel)
+                   
             
         # add in modes
         if 'reiomodes' in params:
@@ -152,6 +166,7 @@ class planck(SlikPlugin):
                  nmodes=5, 
                  lowl='simlow',
                  tauprior='',
+                 reiomodel="tanh",
                  gpprior=False,
                  lowp_lmax=None,
                  lowp_lmin=None,
@@ -220,6 +235,7 @@ class planck(SlikPlugin):
                              DoLensing=(not only_lowp),
                              mhprior=mhprior,
                              mhfid=mhfid,
+                             reiomodel=reiomodel,
                              mhfidbase=mhfidbase,
                              gpprior=gpprior,
                              clip=clip,
