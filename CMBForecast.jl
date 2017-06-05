@@ -6,7 +6,7 @@ using Fisher
 using Base.Threads
 using NamedArrays
 
-export get_Cℓ, get_Nℓ, get_dCℓs, get_fish, get_cp, named_Cℓ_array, noise_add
+export get_Cℓ, get_Nℓ, get_dCℓs, get_fish, get_cp, named_Cℓ_array, noise_add, get_dτ_dmi
 
 
 # fiducial parameters (table 8 column 2 of http://arxiv.org/abs/1605.02985)
@@ -67,9 +67,11 @@ doc"""
 Get a CAMBparams object for the given set of parameters which can then be passed to 
 camb.get_results or any other such function.
 """
-function get_cp(;lmax=2998, params...)
+function get_cp(;lmax=2998, sigmoid=nothing, params...)
     
     params = Dict{Any,Any}(params)
+    
+    @assert (:tau in keys(params)) $ (:fidxe in keys(params)) "Must provide one and only one_ of tau or fiducial reionization history"
     
     #some basic derived parameters
     if ~(:H0 in keys(params))
@@ -94,15 +96,30 @@ function get_cp(;lmax=2998, params...)
     cp[:NonLinear] = pop!(params,:NonLinear,0)
     cp[:k_eta_max_scalar] = pop!(params,:k_eta_max_scalar,10000)
     
+    fidxe = pop!(params,:fidxe,nothing)
+    
     #set twice (workaround for camb.set_params bug when setting w/theta simultaneously)
     camb.set_params(cp,lmax=lmax; params...)
     camb.set_params(cp,lmax=lmax; params...) 
     
     #set reioinzation modes if we have any
-    if any(xems.!=0)
-        fidxe = (:tau in keys(params)) ? cp[:Reion][:get_xe](z=z) : 0
+    if fidxe != nothing || any(xems.!=0)
+        if fidxe == nothing
+            fidxe = cp[:Reion][:get_xe](z=z)
+        end
         cp[:tau] = 0
-        cp[:Reion][:set_xe](z=z,xe=fidxe+modes'*xems)
+        
+        if any(xems.!=0)
+            if sigmoid==nothing
+                xe = fidxe + modes'*xems
+            else
+                S,Sinv = sigmoid
+                xe = S.(@view (Sinv.(fidxe) .+ modes'*xems)[:])
+            end
+        else
+            xe = fidxe
+        end
+        cp[:Reion][:set_xe](z=z,xe=xe)
     end
     
     return cp
@@ -133,11 +150,11 @@ function get_Cℓ(; lmax=2998, use_lensed_cls=false, params...)
     Cℓ = named_Cℓ_array(Array(Float64,(3,3,lmax)))
     for l in 1:lmax
         scale = 1e12 * cp[:TCMB]^2 * 2pi/l/(l+1)
-        tt,ee,te = [scale*scls[l,i] for i in [1,2,4]]
-        td,dd    = [scale*lcls[l,i] for i in [2,1]]      
-        Cℓ[:,:,l] = [[tt te td];
-                     [te ee 0 ];
-                     [td 0  dd]]       
+        tt,ee,te    = [scale*scls[l,i] for i in [1,2,4]]
+        dd,td,ed    = [scale*lcls[l,i] for i in [1,2,3]]
+        Cℓ[:,:,l]   = [[tt te td];
+                       [te ee ed];
+                       [td ed dd]]
     end
     
     return Cℓ
@@ -192,39 +209,42 @@ noise_add{T<:Union{Base.Generator,AbstractArray}}(Nℓs::T) = noise_add(Nℓs...
 function get_fish{T<:NamedArray}(Cℓ::T, 
                                  Nℓ::T,        
                                  dCℓ::Dict{Symbol,T};
-                                 lmin=2, 
-                                 lmax=size(Cℓ,3),
                                  fsky=1, 
-                                 use=[:T,:E,:d], 
+                                 lranges=nothing, 
                                  ps=collect(keys(dCℓ)))
 
-    Cℓ = Cℓ[use,use,lmin:lmax].array
-    Nℓ = Nℓ[use,use,lmin:lmax].array
-    dCℓ = Dict(k=>dCℓ[k][use,use,lmin:lmax].array for k in ps)
     
-    Cℓ⁻¹ = mapslices(inv, Cℓ+Nℓ, (1,2))
+    if isa(lranges,UnitRange) lranges = Dict(x=>lranges for x in [:TT,:TE,:EE,:Td,:dd]) end
+    lranges = Dict(map(Symbol,(string(k)...))=>v for (k,v)=lranges)
+    lmin, lmax = (m([m(r) for r=values(lranges)]) for m=[minimum,maximum])
     
+    Tℓ = Cℓ + Nℓ            
     fish = zeros(Float64,(length(ps),length(ps)))
-    ijs = [((i,pi),(j,pj)) for (i,pi) in enumerate(ps) for (j,pj) in enumerate(ps) if i>=j]
-    
-    for ij in ijs
-        ((i,pi),(j,pj)) = ij
-        for (ℓ,l) in zip(lmin:lmax,1:lmax-lmin)
-            fish[i,j] += (2*ℓ+1)/2*fsky*trace(Cℓ⁻¹[:,:,l]*dCℓ[pi][:,:,l]*Cℓ⁻¹[:,:,l]*dCℓ[pj][:,:,l])
-        end
-        fish[j,i] = fish[i,j]
-    end
-    
-    return FisherMatrix(fish,ps)
 
+    for l in lmin:lmax
+        use = [k for (k,v)=lranges if l in v]
+        cv = [1/(2l+1)/fsky*(Tℓ[a,c,l]*Tℓ[b,d,l] + Tℓ[a,d,l]*Tℓ[b,c,l]) for (a,b)=use, (c,d)=use]
+        d = [dCℓ[k][a,b,l] for (a,b)=use, k=ps]
+        fish += d' * inv(cv) * d
+    end
+
+    return FisherMatrix(fish,ps)
 end
 
 
 function get_dCℓs(p0::Dict, dp::Dict, pvary=keys(p0))
-    Dict(k => ((  get_Cℓ(;merge(p0,Dict(k=>p0[k]+dp[k]/2))...) 
-                - get_Cℓ(;merge(p0,Dict(k=>p0[k]-dp[k]/2))...))/dp[k])
-         for k in pvary)
+    Dict(k => -((get_Cℓ(;merge(p0,Dict(k=>p0[k]+x*dp[k]/2))...) for x=[1,-1])...)/dp[k] for k in pvary)
 end
+
+get_τ(;p...) = camb.get_background(get_cp(;p...))[:get_tau]()
+
+function get_dτ_dmi(p0,nmodes=10)
+    p = merge(p0,Dict(:lmax=>100, :DoLensing=>false))
+    dp = 0.1
+    dτs = [1; [(get_τ(;merge(p,Dict(k=>dp/2))...) - get_τ(;merge(p,Dict(k=>-dp/2))...))/dp
+            for k in [Symbol("m_$i") for i=1:nmodes]]]
+end
+
 
 
 end
