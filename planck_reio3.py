@@ -70,7 +70,7 @@ class CambReio(SlikPlugin):
                     xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
                     xe[self.z<zp] = f
                     self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=1e-3)
-                    return camb.get_background(cp).get_tau() - params["tau"]
+                    return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
                 dtau(brentq(dtau,6.2,10,rtol=1e-3))
             else:
                 raise ValueError("Unrecognized reionization model '%s'"%self.reiomodel)
@@ -304,6 +304,7 @@ class planck(SlikPlugin):
         # generate the file name for this chain based on all the options set
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
+        if reiomodel!="tanh": run_id.append('reiomodel%s'%reiomodel)
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
         if no_clik:
             run_id.append("noclik")
