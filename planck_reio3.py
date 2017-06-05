@@ -364,6 +364,9 @@ class planck(SlikPlugin):
 
 
     def __call__(self, background_only=False):
+        
+        background_only = background_only or self.no_clik
+        
         try:
             
             self.cosmo.cosmomc_theta = self.cosmo.theta
@@ -388,8 +391,9 @@ class planck(SlikPlugin):
             self.cosmo.H0 = self.camb.H0
             
             
-            if (any([any(isnan(x)) for x in list(self.cls.values())])
-                or any([any(x>1e5) for x in list(self.cls.values())])):
+            if (not background_only and 
+                (any([any(isnan(x)) for x in list(self.cls.values())])
+                 or any([any(x>1e5) for x in list(self.cls.values())]))):
                 raise Exception("CAMB outputted crazy Cls")
             
             badxe = False
