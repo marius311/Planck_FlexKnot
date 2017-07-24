@@ -188,7 +188,7 @@ class planck(SlikPlugin):
         
     
         assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
-        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl, "Unrecognized lowl likelihood"
+        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
         if "lcdm" in model:
@@ -272,6 +272,10 @@ class planck(SlikPlugin):
                     clik_file=lowl.replace("clik","")+'_MA_EE_2_32_2016_03_31.clik',
                     mdb=mdb,
                     auto_reject_errors=True
+                )
+            elif (lowl.startswith('simall')):
+                self.lowlP = likelihoods.planck.clik(
+                    clik_file='simall_100x143_offlike2_%s_Aplanck.clik'%(lowl.split('_')[1])
                 )
             elif lowl=='bflike':
                 if lowp_lmax or lowp_lmin: raise ValueError("bflike lmax not implemented")
