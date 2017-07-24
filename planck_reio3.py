@@ -4,6 +4,7 @@ import os.path as osp
 from shutil import copytree, rmtree
 from tempfile import mkdtemp
 from scipy.optimize import brentq
+from scipy.interpolate import pchip_interpolate
 import pickle
 
 import camb
@@ -27,9 +28,11 @@ class CambReio(SlikPlugin):
     z = linspace(0,50,1024)
 
     def __init__(self, modesfile, lmax=5000, DoLensing=True, reiomodel="tanh",
-                 mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15):
+                 mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15,
+                 smooth=1e-5):
         super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
-                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase, reiomodel=reiomodel)
+                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase, reiomodel=reiomodel,
+                         smooth=smooth)
 
         #load eigenmodes
         dat = loadtxt(modesfile)
@@ -54,6 +57,7 @@ class CambReio(SlikPlugin):
         cp.k_eta_max_scalar = 2*self.lmax
         cp.DoLensing = self.DoLensing
         cp.NonLinear = 0
+        cp.AccurateReionization = True
         self.H0 = cp.H0
         
         # get fiducial 
@@ -69,7 +73,8 @@ class CambReio(SlikPlugin):
                     zp = 6.1
                     xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
                     xe[self.z<zp] = f
-                    self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=1e-3)
+                    xe = pchip2_interpolate(self.z,xe,self.z,nsmooth=30)
+                    self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=self.smooth)
                     return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
                 dtau(brentq(dtau,6.2,10,rtol=1e-3))
             else:
@@ -94,8 +99,8 @@ class CambReio(SlikPlugin):
                 
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
-                
-                self.xe = cp.Reion.set_xe(z=self.z,xe=self.xe,smooth=0.3)
+                    
+                self.xe = cp.Reion.set_xe(z=self.z,xe=self.pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30),smooth=0)
             
         
         self.xe_thin = self.xe[::10]
@@ -431,3 +436,15 @@ class planck(SlikPlugin):
              ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls)),
              ('inv_mode_prior', lambda: log(max(3e-2,nan_to_num(self.mode_prior(self.cosmo.tau_out)))) if self.undo_mode_prior else 0)]
         )
+
+
+
+"""Like pchip_interpolate but keeps the second derivative continuous too"""
+def pchip2_interpolate(xi,yi,x,nsmooth=None):
+    if nsmooth:
+        xi2 = linspace(min(xi),max(xi),nsmooth)
+        xi, yi = xi2, interp(xi2,xi,yi)
+               
+    y = hstack([[0],cumsum(pchip_interpolate((xi[1:]+xi[:-1])/2,diff(yi),(x[1:]+x[:-1])/2))])
+    y /= y[0] - y[-1] / (yi[0] - yi[-1]) 
+    return y + yi[0]
