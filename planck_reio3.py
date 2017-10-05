@@ -27,20 +27,21 @@ class CambReio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens','nrun']
     z = linspace(0,50,1024)
 
-    def __init__(self, modesfile, lmax=5000, DoLensing=True, reiomodel="tanh",
+    def __init__(self, modesfile=None, lmax=5000, DoLensing=True, reiomodel="tanh",
                  mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15,
                  smooth=1e-5):
         super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
                          clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase, reiomodel=reiomodel,
                          smooth=smooth)
 
-        #load eigenmodes
-        dat = loadtxt(modesfile)
-        z_modes, self.modes = dat[0], dat[1:]
-        # interpolate onto our z values
-        self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
-        self.Nz = len(self.z)
-        α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
+        if modesfile:
+            #load eigenmodes
+            dat = loadtxt(modesfile)
+            z_modes, self.modes = dat[0], dat[1:]
+            # interpolate onto our z values
+            self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
+            self.Nz = len(self.z)
+            α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
         
         if mhfid:
             f, b = 1.08, self.mhfidbase
@@ -100,7 +101,13 @@ class CambReio(SlikPlugin):
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
                     
-                self.xe = cp.Reion.set_xe(z=self.z,xe=self.pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30),smooth=0)
+                self.xe = cp.Reion.set_xe(z=self.z,xe=pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30),smooth=0)
+                
+        elif "reioknots" in params:
+            
+            zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))            
+            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,1,zi,49,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=50)
+            cp.Reion.set_xe(z=self.z, xe=self.xe)
             
         
         self.xe_thin = self.xe[::10]
@@ -172,6 +179,7 @@ class planck(SlikPlugin):
                  lowl='simlow',
                  tauprior='',
                  reiomodel="tanh",
+                 reioknots="6,7.5,10,20",
                  gpprior=False,
                  lowp_lmax=None,
                  lowp_lmin=None,
@@ -189,10 +197,11 @@ class planck(SlikPlugin):
                  covmat=[]):
         
         hardxe=eval(hardxe)
+        if isinstance(reioknots,str): reioknots = eval(reioknots)
         super().__init__(**arguments())
         
     
-        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
+        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','reioknots','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
         assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
@@ -234,6 +243,11 @@ class planck(SlikPlugin):
                 self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
                 if 'binmodes' in modesfile:
                     self.cosmo.reiomodes['mode%i'%i].min = 0
+        elif 'reioknots' in model:
+            assert 'tau' not in model
+            self.cosmo.reioknots = SlikDict()
+            for zk in self.reioknots:
+                self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
 
         self.camb = CambReio(modesfile,
                              lmax=200 if only_lowp else 5000,
