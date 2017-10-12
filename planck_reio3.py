@@ -176,7 +176,7 @@ class planck(SlikPlugin):
                  model='lcdm_tau', 
                  only_lowp=False, 
                  nmodes=5, 
-                 lowl='simlow',
+                 lowl='simall_EE',
                  tauprior='',
                  reiomodel="tanh",
                  reioknots="6,7.5,10,20",
@@ -237,17 +237,6 @@ class planck(SlikPlugin):
         else:
             self.cosmo.tau = fidtau
             
-        if 'reiomodes' in model:
-            self.cosmo.reiomodes = SlikDict()
-            for i in range(nmodes):
-                self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
-                if 'binmodes' in modesfile:
-                    self.cosmo.reiomodes['mode%i'%i].min = 0
-        elif 'reioknots' in model:
-            assert 'tau' not in model
-            self.cosmo.reioknots = SlikDict()
-            for zk in self.reioknots:
-                self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
 
         self.camb = CambReio(modesfile,
                              lmax=200 if only_lowp else 5000,
@@ -258,7 +247,25 @@ class planck(SlikPlugin):
                              mhfidbase=mhfidbase,
                              gpprior=gpprior,
                              clip=clip,
-                             hardxe=hardxe)
+                             hardxe=hardxe,
+                             )
+        
+        if 'reiomodes' in model:
+            self.cosmo.reiomodes = SlikDict()
+            for i in range(nmodes):
+                p = self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
+                if mhprior:
+                    p.min = self.mhprior*self.camb.mminus[i]
+                    p.max = self.mhprior*self.camb.mplus[i]
+                if 'binmodes' in modesfile:
+                    p.min = 0
+        elif 'reioknots' in model:
+            assert 'tau' not in model
+            self.cosmo.reioknots = SlikDict()
+            for zk in self.reioknots:
+                self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
+        
+        
         if undo_mode_prior:
             with open(self.undo_mode_prior,"rb") as f:
                 self.mode_prior = pickle.load(f).get(self.nmodes, lambda tau: 1)
@@ -328,6 +335,8 @@ class planck(SlikPlugin):
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
         if reiomodel!="tanh": run_id.append('reiomodel%s'%reiomodel)
+        if 'reioknots' in reiomodel:
+            run_id.append('knots_'+'_'.join(map(str,reioknots)))
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
         if no_clik:
             run_id.append("noclik")
