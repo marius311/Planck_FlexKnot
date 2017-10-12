@@ -301,7 +301,7 @@ class planck(SlikPlugin):
                 )
             elif (lowl.startswith('simall')):
                 self.lowlP = likelihoods.planck.clik(
-                    clik_file='simall_100x143_offlike2_%s_Aplanck.clik'%(lowl.split('_')[1])
+                    clik_file='simall_100x143_offlike5_%s_Aplanck.clik'%(lowl.split('_')[1])
                 )
             elif lowl=='bflike':
                 if lowp_lmax or lowp_lmin: raise ValueError("bflike lmax not implemented")
@@ -363,33 +363,40 @@ class planck(SlikPlugin):
             run_id.append("hardxe%.3i%.3i"%(int(1e2*abs(hardxe[0])),int(1e2*hardxe[1])))
         
 
-        extra_format = {'clTT':('clTT','(100,)d'),
-                        'clTE':('clTE','(100,)d'),
-                        'clEE':('clEE','(100,)d'),
-                        'xe':('camb.xe_thin','(103,)d')}
-        _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
-        self.sampler = _sampler(
-            self,
-            num_samples = 1e8,
-            output_file = 'chains/chain_'+'_'.join(run_id),
-            cov_est = covmat,
-            output_extra_params = [
-                'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_mode_prior',
-                'cosmo.tau_out','cosmo.H0'
-            ] + ([extra_format[e] for e in extras.split(',')] if extras else [])
-        )
-        if sampler=='mh':
-            self.sampler.update(dict(
-                print_level = 1,
-                proposal_update_start = 2000,
-                proposal_scale = 1.5,
-                mpi_comm_freq = 5,
-            ))
-        elif sampler=='emcee':
-            self.sampler.update(dict(
-                nwalkers = 100,
-                output_freq = 1
-            ))
+        if sampler=='polychord':
+            self.sampler = samplers.polychord(
+                self,
+                output_file = 'polychord/'+'_'.join(run_id),
+                nlive = 300
+            )
+        else:
+            extra_format = {'clTT':('clTT','(100,)d'),
+                            'clTE':('clTE','(100,)d'),
+                            'clEE':('clEE','(100,)d'),
+                            'xe':('camb.xe_thin','(103,)d')}
+            _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
+            self.sampler = _sampler(
+                self,
+                num_samples = 1e8,
+                output_file = 'chains/chain_'+'_'.join(run_id),
+                cov_est = covmat,
+                output_extra_params = [
+                    'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_mode_prior',
+                    'cosmo.tau_out','cosmo.H0'
+                ] + ([extra_format[e] for e in extras.split(',')] if extras else [])
+            )
+            if sampler=='mh':
+                self.sampler.update(dict(
+                    print_level = 1,
+                    proposal_update_start = 2000,
+                    proposal_scale = 1.5,
+                    mpi_comm_freq = 5,
+                ))
+            elif sampler=='emcee':
+                self.sampler.update(dict(
+                    nwalkers = 100,
+                    output_freq = 1
+                ))
                                 
 
         
