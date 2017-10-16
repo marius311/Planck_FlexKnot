@@ -367,6 +367,8 @@ class planck(SlikPlugin):
             self.sampler = samplers.polychord(
                 self,
                 output_file = 'polychord/'+'_'.join(run_id),
+                read_resume = False,
+                do_clustering = False,
                 nlive = 300
             )
         else:
