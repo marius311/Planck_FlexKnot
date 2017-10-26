@@ -5,7 +5,7 @@ from shutil import copytree, rmtree
 from tempfile import mkdtemp
 from scipy.optimize import brentq
 from scipy.interpolate import pchip_interpolate
-import pickle
+import dill as pickle
 
 import camb
 from numpy import *
@@ -105,8 +105,8 @@ class CambReio(SlikPlugin):
                 
         elif "reioknots" in params:
             
-            zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))            
-            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,1,zi,49,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=50)
+            zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
+            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.5 if self.gpprior else 1),zi,30,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=50)
             cp.Reion.set_xe(z=self.z, xe=self.xe)
             
         
@@ -172,7 +172,7 @@ class planck(SlikPlugin):
 
     def __init__(self, 
                  modesfile="reiotau_xepcs_v3.dat",
-                 undo_mode_prior='',
+                 undo_tau_prior='',
                  model='lcdm_tau', 
                  only_lowp=False, 
                  nmodes=5, 
@@ -266,9 +266,9 @@ class planck(SlikPlugin):
                 self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
         
         
-        if undo_mode_prior:
-            with open(self.undo_mode_prior,"rb") as f:
-                self.mode_prior = pickle.load(f).get(self.nmodes, lambda tau: 1)
+        if undo_tau_prior:
+            with open(self.undo_tau_prior,"rb") as f:
+                self.tau_prior = pickle.load(f)
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -355,8 +355,8 @@ class planck(SlikPlugin):
             run_id.append('taup%.3i%.3i'%(int(1e3*μ),int(1e3*σ)))
         if sampler=='emcee': run_id.append('emcee')
         if modesfile!="reiotau_xepcs.dat": run_id.append(osp.splitext(modesfile)[0])
-        if undo_mode_prior:
-            run_id.append("undo_"+undo_mode_prior.replace(modesfile.replace('.dat',''),'').replace('.dat','').strip('_'))
+        if undo_tau_prior:
+            run_id.append("undo_"+osp.basename(undo_tau_prior).replace('.dat',''))
         if clip:
             run_id.append("clip")
         if hardxe!=(-0.5,1.5):
@@ -383,7 +383,7 @@ class planck(SlikPlugin):
                 output_file = 'chains/chain_'+'_'.join(run_id),
                 cov_est = covmat,
                 output_extra_params = [
-                    'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_mode_prior',
+                    'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_tau_prior',
                     'cosmo.tau_out','cosmo.H0'
                 ] + ([extra_format[e] for e in extras.split(',')] if extras else [])
             )
@@ -424,7 +424,7 @@ class planck(SlikPlugin):
                 if 'lowlP' in self: 
                     self.lowlP.A_planck = self.calPlanck
             
-            self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_mode_prior']})
+            self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_tau_prior']})
 
                 
             self.cls = self.camb(background_only=background_only,**self.cosmo)
@@ -466,7 +466,7 @@ class planck(SlikPlugin):
             [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
              ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls)),
-             ('inv_mode_prior', lambda: log(max(3e-2,nan_to_num(self.mode_prior(self.cosmo.tau_out)))) if self.undo_mode_prior else 0)]
+             ('inv_tau_prior', lambda: log(max(3e-2,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
         )
 
 
