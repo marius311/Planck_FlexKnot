@@ -233,7 +233,7 @@ class planck(SlikPlugin):
             self.cosmo.logA = param(3.108,0.03,min=2.8,max=3.4)
             
         if 'tau' in model:
-            self.cosmo.tau = param(0.055,0.01,min=0.02,max=0.1)
+            self.cosmo.tau = param(0.055,0.01,min=0.02,max=0.2)
         else:
             self.cosmo.tau = fidtau
             
