@@ -367,6 +367,7 @@ class planck(SlikPlugin):
             self.sampler = samplers.polychord(
                 self,
                 output_file = 'polychord/'+'_'.join(run_id),
+                output_extra_params = ['cosmo.tau_out', 'cosmo.H0'],
                 read_resume = False,
                 do_clustering = False,
                 nlive = 300
