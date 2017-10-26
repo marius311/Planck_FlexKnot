@@ -335,7 +335,7 @@ class planck(SlikPlugin):
         run_id = [model]
         if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
         if reiomodel!="tanh": run_id.append('reiomodel%s'%reiomodel)
-        if 'reioknots' in reiomodel:
+        if 'reioknots' in model:
             run_id.append('knots_'+'_'.join(map(str,reioknots)))
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
         if no_clik:
