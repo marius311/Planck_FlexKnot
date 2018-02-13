@@ -9,6 +9,7 @@ import dill as pickle
 
 import camb
 from numpy import *
+from numpy.random import uniform
 
 from cosmoslik import *
 
@@ -103,13 +104,18 @@ class CambReio(SlikPlugin):
                     
                 self.xe = cp.Reion.set_xe(z=self.z,xe=pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30),smooth=0)
                 
-        elif "reioknots" in params:
+        elif "reioknots" in params or "reioflexknots" in params:
             
-            zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
-            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.5 if self.gpprior else 1),zi,30,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=50)
+            if "reioflexknots" in params:
+                N = params['reioflexknots'].nknots
+                zi = sorted([params['reioflexknots']['z%i'%i] for i in range(N)])
+                xei = hstack([1.08,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
+            else:
+                zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
+                
+            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.9 if self.gpprior else 1),zi,30,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=200)
             cp.Reion.set_xe(z=self.z, xe=self.xe)
             
-        
         self.xe_thin = self.xe[::10]
         
         if background_only:
@@ -201,7 +207,7 @@ class planck(SlikPlugin):
         super().__init__(**arguments())
         
     
-        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','reioknots','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
+        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','reioknots','reioflexknots','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
         assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
@@ -264,11 +270,21 @@ class planck(SlikPlugin):
             self.cosmo.reioknots = SlikDict()
             for zk in self.reioknots:
                 self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
-        
+        elif 'reioflexknots' in model:
+            assert 'tau' not in model
+            self.cosmo.reioflexknots = SlikDict(nknots=nmodes)
+            for i in range(nmodes):
+                self.cosmo.reioflexknots['z%i'%i]  = param(uniform(6,30), 4, min=(6 if self.gpprior else 1), max=30)
+            for i in range(1,nmodes-1):
+                self.cosmo.reioflexknots['xe%i'%i] = param(0.5, 0.3, min=0, max=1.08)
+            
         
         if undo_tau_prior:
-            with open(self.undo_tau_prior,"rb") as f:
-                self.tau_prior = pickle.load(f)
+            if isinstance(undo_tau_prior,str):
+                with open(self.undo_tau_prior,"rb") as f:
+                    self.tau_prior = pickle.load(f)
+            else:
+                self.tau_prior = self.undo_tau_prior
 
         if not only_lowp:
             self.calPlanck = param(1,0.0025,gaussian_prior=(1,0.0025))
@@ -328,8 +344,6 @@ class planck(SlikPlugin):
                 raise ValueError(lowl)
             
         self.priors = likelihoods.priors(self)
-
-        # self.priors.add_uniform_prior('cosmo.tau_out',0,0.1)
 
         # generate the file name for this chain based on all the options set
         run_id = [model]
