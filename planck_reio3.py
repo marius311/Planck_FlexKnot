@@ -347,7 +347,8 @@ class planck(SlikPlugin):
 
         # generate the file name for this chain based on all the options set
         run_id = [model]
-        if 'reiomodes' in model: run_id.append('nmodes%i'%nmodes)
+        if 'reiomodes' in model or 'reioflexknots' in model: 
+            run_id.append('nmodes%i'%nmodes)
         if reiomodel!="tanh": run_id.append('reiomodel%s'%reiomodel)
         if 'reioknots' in model:
             run_id.append('knots_'+'_'.join(map(str,reioknots)))
@@ -370,7 +371,10 @@ class planck(SlikPlugin):
         if sampler=='emcee': run_id.append('emcee')
         if modesfile!="reiotau_xepcs.dat": run_id.append(osp.splitext(modesfile)[0])
         if undo_tau_prior:
-            run_id.append("undo_"+osp.basename(undo_tau_prior).replace('.dat',''))
+            if isinstance(undo_tau_prior,str):
+                run_id.append("undo_"+osp.basename(undo_tau_prior).replace('.dat',''))
+            else:
+                run_id.append("undo_tau_prior")
         if clip:
             run_id.append("clip")
         if hardxe!=(-0.5,1.5):
