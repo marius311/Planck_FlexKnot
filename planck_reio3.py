@@ -28,29 +28,58 @@ class CambReio(SlikPlugin):
     camb_params = ['As','ns','ombh2','omch2','cosmomc_theta','pivot_scalar','mnu','tau','ALens','nrun']
     z = linspace(0,50,1024)
 
-    def __init__(self, modesfile=None, lmax=5000, DoLensing=True, reiomodel="tanh",
-                 mhprior=False, gpprior=False, clip=False, hardxe=None, mhfid=False, mhfidbase=0.15,
-                 smooth=1e-5):
-        super().__init__(lmax=lmax, DoLensing=DoLensing, mhprior=mhprior, gpprior=gpprior, 
-                         clip=clip, hardxe=hardxe, mhfid=mhfid, mhfidbase=mhfidbase, reiomodel=reiomodel,
-                         smooth=smooth)
+    def __init__(self, params, clip=False, DoLensing=True, fHe=0.08, gpprior=False,
+                 hardxe=None, include_helium_fullreion=True, lmax=5000, mhfid=False,
+                 mhfidbase=0.15, mhprior=False, model=None, modesfile=None, nmodes=None,
+                 reioknots=None, smooth=1e-5):
+        
+        super().__init__(**arguments(exclude=['params']))
 
-        if modesfile:
-            #load eigenmodes
+        # add appropriate sampled parameters based on reionization model
+        if 'reiotanh' in model:
+            params.tau = param(0.055,0.01,min=0.02,max=0.2)
+        
+        elif 'reioknots' in model:
+            params.reioknots = SlikDict()
+            for zk in self.reioknots:
+                params.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1+fHe)
+        
+        elif 'reioflexknots' in model:
+            params.reioflexknots = SlikDict(nknots=nmodes)
+            for i in range(nmodes):
+                params.reioflexknots['z%i'%i]  = param(uniform(6,30), 4, min=(6 if self.gpprior else 1), max=30)
+            for i in range(1,nmodes-1):
+                params.reioflexknots['xe%i'%i] = param(0.5, 0.3, min=0, max=1+fHe)
+        
+        elif 'reiomodes' in model:
+            
+            # load eigenmodes
             dat = loadtxt(modesfile)
             z_modes, self.modes = dat[0], dat[1:]
             # interpolate onto our z values
             self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
             self.Nz = len(self.z)
             α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
+            
+            if mhfid:
+                f, b = 1+fHe, self.mhfidbase
+                self.xe_fid = ((f-b)*(1-tanh((self.z-6.25)/0.1))/2 + b) * ((1-tanh((self.z-30)/0.1))/2)
+            
+            if mhprior:
+                assert mhfid, "--mhfid must be set if --mhprior is"
+                self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2/α for x in [1,-1])
+                
+            params.reiomodes = SlikDict()
+            for i in range(nmodes):
+                p = params.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
+                if mhprior:
+                    p.min = self.mhprior*self.camb.mminus[i]
+                    p.max = self.mhprior*self.camb.mplus[i]
+                if 'binmodes' in modesfile:
+                    p.min = 0
         
-        if mhfid:
-            f, b = 1.08, self.mhfidbase
-            self.xe_fid = ((f-b)*(1-tanh((self.z-6.25)/0.1))/2 + b) * ((1-tanh((self.z-30)/0.1))/2)
-        
-        if mhprior:
-            assert mhfid, "--mhfid must be set if --mhprior is"
-            self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2/α for x in [1,-1])
+        else:
+            params.tau = fidtau
 
 
     def __call__(self,background_only=False,**params):
@@ -61,17 +90,18 @@ class CambReio(SlikPlugin):
         cp.NonLinear = 0
         cp.AccurateReionization = True
         self.H0 = cp.H0
+        fHe = self.fHe
         
         # get fiducial 
         if self.mhfid:
             self.xe = self.xe_fid
-        else:
-            if self.reiomodel=="tanh":
+        elif "reioflexknots" not in self.model:
+            if "reiotanh" in self.model:
                 camb.get_background(cp)
                 self.xe = self.xe_fid = cp.Reion.get_xe(z=self.z)
-            elif self.reiomodel=="exp":
+            elif "reioexp" in self.model:
                 def dtau(zreio):
-                    f = 1.08
+                    f = 1+fHe
                     zp = 6.1
                     xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
                     xe[self.z<zp] = f
@@ -79,12 +109,9 @@ class CambReio(SlikPlugin):
                     self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=self.smooth)
                     return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
                 dtau(brentq(dtau,6.2,10,rtol=1e-3))
-            else:
-                raise ValueError("Unrecognized reionization model '%s'"%self.reiomodel)
                    
-            
         # add in modes
-        if 'reiomodes' in params:
+        if 'reiomodes' in self.model:
             m = array([params['reiomodes'].get('mode%i'%i,0) for i in range(len(self.modes))])
             
             if any(m!=0):
@@ -97,25 +124,28 @@ class CambReio(SlikPlugin):
                     if any(self.xe<self.hardxe[0]) or any(self.xe>self.hardxe[1]): raise BadXe()
                 
                 if self.gpprior:
-                    if interp(6,self.z,self.xe) < (0.99 * 1.08): raise BadXe()
+                    if interp(6,self.z,self.xe) < (0.99 * 1+fHe): raise BadXe()
                 
                 if self.clip:
                     self.xe = clip(self.xe,0,1.17)
                     
-                self.xe = cp.Reion.set_xe(z=self.z,xe=pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30),smooth=0)
+                self.xe = pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30)
                 
-        elif "reioknots" in params or "reioflexknots" in params:
+        elif "reioknots" in self.model or "reioflexknots" in self.model:
             
             if "reioflexknots" in params:
                 N = params['reioflexknots'].nknots
                 zi = sorted([params['reioflexknots']['z%i'%i] for i in range(N)])
-                xei = hstack([1.08,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
+                xei = hstack([1+fHe,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
             else:
                 zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
                 
-            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.9 if self.gpprior else 1),zi,30,50]), hstack([1.08,1.08,xei,0,0]), self.z), self.z, nsmooth=200)
-            cp.Reion.set_xe(z=self.z, xe=self.xe)
+            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.9 if self.gpprior else 1),zi,30,50]), hstack([1+fHe,1+fHe,xei,0,0]), self.z), self.z, nsmooth=200)
             
+        if self.include_helium_fullreion:
+            self.xe += fHe*(tanh(-(self.z-3.5)/0.5)+1)/2
+        
+        self.xe = cp.Reion.set_xe(z=self.z, xe=self.xe)
         self.xe_thin = self.xe[::10]
         
         if background_only:
@@ -126,6 +156,7 @@ class CambReio(SlikPlugin):
             cl = dict(zip(['TT','EE','BB','TE'],(cp.TCMB*1e6)**2*r.get_total_cls(self.lmax).T))
             cl['TB'] = cl['EB'] = zeros(self.lmax)
             return cl
+
 
 
 class CVLowP(SlikPlugin):
@@ -179,12 +210,11 @@ class planck(SlikPlugin):
     def __init__(self, 
                  modesfile="reiotau_xepcs_v3.dat",
                  undo_tau_prior='',
-                 model='lcdm_tau', 
+                 model='lcdm_reiotanh', 
                  only_lowp=False, 
                  nmodes=5, 
                  lowl='simall_EE',
                  tauprior='',
-                 reiomodel="tanh",
                  reioknots="6,7.5,10,20",
                  gpprior=False,
                  lowp_lmax=None,
@@ -200,14 +230,16 @@ class planck(SlikPlugin):
                  fidtau=0.055,
                  no_clik=False,
                  extras='',
-                 covmat=[]):
+                 covmat=[],
+                 auto_reject_errors=True,
+                 ):
         
         hardxe=eval(hardxe)
         if isinstance(reioknots,str): reioknots = eval(reioknots)
         super().__init__(**arguments())
         
     
-        assert all([x in ['lcdm','mnu','tau','nrun','reiomodes','reioknots','reioflexknots','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
+        assert all([x in ['lcdm','mnu','tau','nrun','reiotanh','reiomodes','reioknots','reioflexknots','ALens','fixA','fixclamp'] for x in model.split('_')]), "Unrecognized model"
         assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
@@ -238,46 +270,19 @@ class planck(SlikPlugin):
         else:
             self.cosmo.logA = param(3.108,0.03,min=2.8,max=3.4)
             
-        if 'tau' in model:
-            self.cosmo.tau = param(0.055,0.01,min=0.02,max=0.2)
-        else:
-            self.cosmo.tau = fidtau
-            
-
-        self.camb = CambReio(modesfile,
+        self.camb = CambReio(self.cosmo,
+                             modesfile=modesfile,
                              lmax=200 if only_lowp else 5000,
                              DoLensing=(not only_lowp),
                              mhprior=mhprior,
                              mhfid=mhfid,
-                             reiomodel=reiomodel,
+                             model=model,
+                             nmodes=nmodes,
+                             reioknots=reioknots,
                              mhfidbase=mhfidbase,
                              gpprior=gpprior,
                              clip=clip,
-                             hardxe=hardxe,
-                             )
-        
-        if 'reiomodes' in model:
-            self.cosmo.reiomodes = SlikDict()
-            for i in range(nmodes):
-                p = self.cosmo.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
-                if mhprior:
-                    p.min = self.mhprior*self.camb.mminus[i]
-                    p.max = self.mhprior*self.camb.mplus[i]
-                if 'binmodes' in modesfile:
-                    p.min = 0
-        elif 'reioknots' in model:
-            assert 'tau' not in model
-            self.cosmo.reioknots = SlikDict()
-            for zk in self.reioknots:
-                self.cosmo.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1.08)
-        elif 'reioflexknots' in model:
-            assert 'tau' not in model
-            self.cosmo.reioflexknots = SlikDict(nknots=nmodes)
-            for i in range(nmodes):
-                self.cosmo.reioflexknots['z%i'%i]  = param(uniform(6,30), 4, min=(6 if self.gpprior else 1), max=30)
-            for i in range(1,nmodes-1):
-                self.cosmo.reioflexknots['xe%i'%i] = param(0.5, 0.3, min=0, max=1.08)
-            
+                             hardxe=hardxe)
         
         if undo_tau_prior:
             if isinstance(undo_tau_prior,str):
@@ -313,7 +318,7 @@ class planck(SlikPlugin):
                 self.lowlP = ClikCustomMDB(
                     clik_file=lowl.replace("clik","")+'_MA_EE_2_32_2016_03_31.clik',
                     mdb=mdb,
-                    auto_reject_errors=True
+                    auto_reject_errors=auto_reject_errors
                 )
             elif (lowl.startswith('simall')):
                 self.lowlP = likelihoods.planck.clik(
@@ -324,7 +329,7 @@ class planck(SlikPlugin):
                 IQUspec = 'QU' if only_lowp else 'SMW'
                 self.lowlP = likelihoods.planck.clik(
                     clik_file='/redtruck/benabed/release/clik_10.3/low_l/bflike/lowl_%s_70_dx11d_2014_10_03_v5c_Ap.clik/'%IQUspec,
-                    auto_reject_errors=True
+                    auto_reject_errors=auto_reject_errors
                 )
             elif lowl in ['cvlowp','simlowlike']:
                 assert not lowp_lmin, "not implemented"
@@ -349,7 +354,6 @@ class planck(SlikPlugin):
         run_id = [model]
         if 'reiomodes' in model or 'reioflexknots' in model: 
             run_id.append('nmodes%i'%nmodes)
-        if reiomodel!="tanh": run_id.append('reiomodel%s'%reiomodel)
         if 'reioknots' in model:
             run_id.append('knots_'+'_'.join(map(str,reioknots)))
         if fidtau!=0.055: run_id.append('fidtau%.3f'%fidtau)
@@ -460,7 +464,10 @@ class planck(SlikPlugin):
         except Exception as e:
             badxe = isinstance(e,BadXe)
             if not badxe:
-                print("Warning, rejecting step: "+str(e))
+                if self.auto_reject_errors:
+                    print("Warning, rejecting step: "+str(e))
+                else:
+                    raise
             return inf
         finally:
             if self.doplot and (not self.noplotbadxe or not badxe):
@@ -485,7 +492,7 @@ class planck(SlikPlugin):
             [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
              ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls)),
-             ('inv_tau_prior', lambda: log(max(3e-2,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
+             ('inv_tau_prior', lambda: log(max(1e-3,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
         )
 
 
