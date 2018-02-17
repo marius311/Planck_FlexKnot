@@ -322,7 +322,7 @@ class planck(SlikPlugin):
                 )
             elif (lowl.startswith('simall')):
                 self.lowlP = likelihoods.planck.clik(
-                    clik_file='simall_100x143_offlike5_%s_Aplanck.clik'%(lowl.split('_')[1])
+                    clik_file='simall_100x143_offlike5_%s_Aplanck_B.clik'%(lowl.split('_')[1])
                 )
             elif lowl=='bflike':
                 if lowp_lmax or lowp_lmin: raise ValueError("bflike lmax not implemented")
@@ -483,16 +483,16 @@ class planck(SlikPlugin):
             
         self.cosmo.tau_out = self.camb.results.get_tau()
 
-        if background_only: return 0
+        if not background_only: 
+            self.clTT = self.cls['TT'][:100]
+            self.clTE = self.cls['TE'][:100]
+            self.clEE = self.cls['EE'][:100]
         
-        self.clTT = self.cls['TT'][:100]
-        self.clTE = self.cls['TE'][:100]
-        self.clEE = self.cls['EE'][:100]
         return lsumk(self.lnls,
             [('highl',lambda: 0 if self.get('highl') is None else self.highl(self.cls)),
              ('lowlT',lambda: 0 if self.get('lowlT') is None else self.lowlT(self.cls)),
              ('lowlP',lambda: 0 if self.get('lowlP') is None else self.lowlP(self.cls)),
-             ('inv_tau_prior', lambda: log(max(1e-3,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
+             ('inv_tau_prior', lambda: log(max(1e-4,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
         )
 
 
