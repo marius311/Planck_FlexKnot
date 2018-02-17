@@ -1,6 +1,9 @@
 .ipynb_checkpoints
 .old
-chains
+chains*
+polychord
+log
+pbs
 covs
 .vscode
 .tags
