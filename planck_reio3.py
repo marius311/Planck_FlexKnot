@@ -73,8 +73,8 @@ class CambReio(SlikPlugin):
             for i in range(nmodes):
                 p = params.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
                 if mhprior:
-                    p.min = self.mhprior*self.camb.mminus[i]
-                    p.max = self.mhprior*self.camb.mplus[i]
+                    p.min = self.mhprior*self.mminus[i]
+                    p.max = self.mhprior*self.mplus[i]
                 if 'binmodes' in modesfile:
                     p.min = 0
         
