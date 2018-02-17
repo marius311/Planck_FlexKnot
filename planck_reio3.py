@@ -35,7 +35,7 @@ class CambReio(SlikPlugin):
         
         super().__init__(**arguments(exclude=['params']))
 
-        # add appropriate sampled parameters based on reionization model
+        # add the appropriate sampled parameters based on reionization model
         if 'reiotanh' in model:
             params.tau = param(0.055,0.01,min=0.02,max=0.2)
         
@@ -92,30 +92,46 @@ class CambReio(SlikPlugin):
         self.H0 = cp.H0
         fHe = self.fHe
         
-        # get fiducial 
+        # compute Xe(z)
         if self.mhfid:
             self.xe = self.xe_fid
-        elif "reioflexknots" not in self.model:
-            if "reiotanh" in self.model:
-                camb.get_background(cp)
-                self.xe = self.xe_fid = cp.Reion.get_xe(z=self.z)
-            elif "reioexp" in self.model:
-                def dtau(zreio):
-                    f = 1+fHe
-                    zp = 6.1
-                    xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
-                    xe[self.z<zp] = f
-                    xe = pchip2_interpolate(self.z,xe,self.z,nsmooth=30)
-                    self.xe = self.xe_fid = cp.Reion.set_xe(z=self.z,xe=xe,smooth=self.smooth)
-                    return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
-                dtau(brentq(dtau,6.2,10,rtol=1e-3))
+            
+        elif "reiotanh" in self.model:
+            camb.get_background(cp)
+            self.xe = cp.Reion.get_xe(z=self.z)
+            
+        elif "reioexp" in self.model:
+            def dtau(zreio):
+                f = 1+fHe
+                zp = 6.1
+                xe = f*exp(-(log(0.5)/(zp-zreio))*(self.z-zp)/(1+0.02/(1e-6+self.z-zp)**2))
+                xe[self.z<zp] = f
+                xe = pchip2_interpolate(self.z,xe,self.z,nsmooth=30)
+                self.xe = cp.Reion.set_xe(z=self.z,xe=xe,smooth=self.smooth)
+                return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
+            dtau(brentq(dtau,6.2,10,rtol=1e-3))
+            
+        elif "reioknots" in self.model or "reioflexknots" in self.model:
+           
+            if "reioflexknots" in params:
+                N = params['reioflexknots'].nknots
+                zi = sorted([params['reioflexknots']['z%i'%i] for i in range(N)])
+                xei = hstack([1+fHe,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
+            else:
+                zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
+               
+            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.9 if self.gpprior else 1),zi,30,50]), hstack([1+fHe,1+fHe,xei,0,0]), self.z), self.z, nsmooth=200)
+            
+        else:
+            self.xe = zeros(self.Nz)
                    
-        # add in modes
+        
+        # if we have modes, add these in
         if 'reiomodes' in self.model:
             m = array([params['reiomodes'].get('mode%i'%i,0) for i in range(len(self.modes))])
             
             if any(m!=0):
-                self.xe = self.xe_fid + dot(m,self.modes)
+                self.xe = self.xe + dot(m,self.modes)
                 
                 if self.mhprior:
                     if any(m < self.mhprior*self.mminus) or any(m > self.mhprior*self.mplus): raise BadXe()
@@ -131,19 +147,10 @@ class CambReio(SlikPlugin):
                     
                 self.xe = pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30)
                 
-        elif "reioknots" in self.model or "reioflexknots" in self.model:
-            
-            if "reioflexknots" in params:
-                N = params['reioflexknots'].nknots
-                zi = sorted([params['reioflexknots']['z%i'%i] for i in range(N)])
-                xei = hstack([1+fHe,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
-            else:
-                zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
-                
-            self.xe = pchip2_interpolate(self.z, pchip_interpolate(hstack([0,(5.9 if self.gpprior else 1),zi,30,50]), hstack([1+fHe,1+fHe,xei,0,0]), self.z), self.z, nsmooth=200)
-            
+        # add in helium reionization
         if self.include_helium_fullreion:
-            self.xe += fHe*(tanh(-(self.z-3.5)/0.5)+1)/2
+            self.xe = self.xe + fHe*(tanh(-(self.z-3.5)/0.5)+1)/2
+        
         
         self.xe = cp.Reion.set_xe(z=self.z, xe=self.xe)
         self.xe_thin = self.xe[::10]
