@@ -10,6 +10,7 @@ import dill as pickle
 import camb
 from numpy import *
 from numpy.random import uniform
+from numpy.linalg import norm
 
 from cosmoslik import *
 
@@ -59,16 +60,18 @@ class CambReio(SlikPlugin):
             # interpolate onto our z values
             self.modes = array([interp(self.z,z_modes,m,left=0,right=0) for m in self.modes])
             self.Nz = len(self.z)
-            α = (max(z_modes)-min(z_modes))/(max(self.z)-min(self.z))
             
             if mhfid:
-                f, b = 1+fHe, self.mhfidbase
-                self.xe_fid = ((f-b)*(1-tanh((self.z-6.25)/0.1))/2 + b) * ((1-tanh((self.z-30)/0.1))/2)
+                xe_max, xe_base = 1+fHe, self.mhfidbase
+                self.xe_fid = ((xe_max-xe_base)*(1-tanh((self.z-6.25)/0.1))/2 + xe_base) * ((1-tanh((self.z-30)/0.1))/2)
             
             if mhprior:
-                assert mhfid, "--mhfid must be set if --mhprior is"
-                self.mplus, self.mminus = (sum(self.modes * (f-2*self.xe_fid) + x*f*abs(self.modes),axis=1)/self.Nz/2/α for x in [1,-1])
+                assert mhfid, "--mhfid must be set if --mhprior is set"
+                self.mplus, self.mminus = (sum(self.modes * (xe_max-2*self.xe_fid) + x*xe_max*abs(self.modes),axis=1)/2/norm(self.modes,axis=1)**2 for x in [1,-1])
                 
+                support = ~all(self.modes==0,axis=0)
+                self.radius = sqrt(sum(support*abs(xe_max-self.xe_fid)**2) / sum(support))
+
             params.reiomodes = SlikDict()
             for i in range(nmodes):
                 p = params.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
@@ -135,6 +138,7 @@ class CambReio(SlikPlugin):
                 
                 if self.mhprior:
                     if any(m < self.mhprior*self.mminus) or any(m > self.mhprior*self.mplus): raise BadXe()
+                    if norm(m) > self.radius: raise BadXe()
                 
                 if self.hardxe:
                     if any(self.xe<self.hardxe[0]) or any(self.xe>self.hardxe[1]): raise BadXe()
