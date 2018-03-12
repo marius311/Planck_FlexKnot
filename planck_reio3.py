@@ -45,11 +45,11 @@ class CambReio(SlikPlugin):
             for zk in self.reioknots:
                 params.reioknots['xe%.4i'%int(100*zk)] = param(0.2, 0.3, min=0, max=1+fHe)
         
-        elif 'reioflexknots' in model:
+        elif ('reioflexknots' in model) or ('reioflexknots2' in model):
             params.reioflexknots = SlikDict(nknots=nmodes)
             for i in range(nmodes):
                 params.reioflexknots['z%i'%i]  = param(uniform(6,30), 4, min=(6 if self.gpprior else 1), max=30)
-            for i in range(1,nmodes-1):
+            for i in (range(nmodes) if 'reioflexknots2' in model else range(1,nmodes-1)):      
                 params.reioflexknots['xe%i'%i] = param(0.5, 0.3, min=0, max=1+fHe)
         
         elif 'reiomodes' in model:
@@ -115,12 +115,15 @@ class CambReio(SlikPlugin):
                 return camb.get_background(cp,no_thermo=True).get_tau() - params["tau"]
             dtau(brentq(dtau,6.2,10,rtol=1e-3))
             
-        elif "reioknots" in self.model or "reioflexknots" in self.model:
+        elif ("reioknots" in self.model) or ("reioflexknots" in self.model) or ("reioflexknots2" in self.model):
            
             if "reioflexknots" in params:
                 N = params['reioflexknots'].nknots
                 zi = sorted([params['reioflexknots']['z%i'%i] for i in range(N)])
-                xei = hstack([1+fHe,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
+                if "reioflexknots2" in self.model:
+                    xei = [params['reioflexknots']['xe%i'%i] for i in range(N)]
+                else:
+                    xei = hstack([1+fHe,[params['reioflexknots']['xe%i'%i] for i in range(1,N-1)],0])
             else:
                 zi,xei = transpose(sorted([(float(k[2:])/100,v) for k,v in params['reioknots'].items()]))      
                
@@ -259,14 +262,14 @@ class planck(SlikPlugin):
         super().__init__(**arguments())
         
         model = model.split('_')
-        assert all([x in ['lcdm','mnu','tau','nrun','r','reiotanh','reiomodes','reioknots','reioflexknots','ALens','fixA','fixclamp'] for x in model]), "Unrecognized model"
+        assert all([x in ['lcdm','mnu','tau','nrun','r','reiotanh','reiomodes','reioknots','reioflexknots','reioflexknots2','ALens','fixA','fixclamp'] for x in model]), "Unrecognized model"
         assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
 
         # generate the file name for this chain based on all the options set
         self.run_id = run_id = ['_'.join(model)]
-        if 'reiomodes' in model or 'reioflexknots' in model: 
+        if 'reiomodes' in model or 'reioflexknots' in model or 'reioflexknots2' in model: 
             run_id.append('nmodes%i'%nmodes)
         if 'reioknots' in model:
             run_id.append('knots_'+'_'.join(map(str,reioknots)))
@@ -513,7 +516,7 @@ class planck(SlikPlugin):
                 plot(self.camb.z,self.camb.xe,marker='.')
                 plot(self.camb.z,self.camb.cp.Reion.get_xe(z=self.camb.z),marker=".")
                 ylim(-1,2)
-                gcf().canvas.draw() 
+                gcf().canvas.draw()
             
             
         self.cosmo.tau_out = self.camb.results.get_tau()
@@ -524,10 +527,10 @@ class planck(SlikPlugin):
             self.clEE = self.cls['EE'][:100]
         
         return lsumk(self.lnls,
-            [('highl',   lambda: self.highl(self.cls)   if self.get('highl')   else 0),
-             ('lowlT',   lambda: self.lowlT(self.cls)   if self.get('lowlT')   else 0),
-             ('lowlP',   lambda: self.lowlP(self.cls)   if self.get('lowlP')   else 0),
-             ('lensing', lambda: self.lensing(self.cls) if self.get('lensing') else 0),
+            [('highl',   lambda: self.highl(self.cls)   if callable(self.get('highl'))   else 0),
+             ('lowlT',   lambda: self.lowlT(self.cls)   if callable(self.get('lowlT'))   else 0),
+             ('lowlP',   lambda: self.lowlP(self.cls)   if callable(self.get('lowlP'))   else 0),
+             ('lensing', lambda: self.lensing(self.cls) if callable(self.get('lensing')) else 0),
              ('inv_tau_prior', lambda: log(max(1e-4,nan_to_num(self.tau_prior(self.cosmo.tau_out)))) if self.undo_tau_prior else 0)]
         )
 
