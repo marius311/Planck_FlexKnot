@@ -40,7 +40,7 @@ module Fisher
 
 export FisherMatrix, stds, corr, with_fixed, like1d, like2d, likegrid
 
-using NamedArrays, PyCall, PyPlot
+using NamedArrays, PyCall, PyPlot, SpecialFunctions
 @pyimport matplotlib.patches as patches
 import Base: +, show
 
@@ -55,7 +55,7 @@ end
 Get the standard deviations of each parameter, i.e. the sqrts of the diagonal of
 the inverse of the Fisher matrix.
 """
-stds(f::FisherMatrix) = Dict(zip(f.names,sqrt(diag(inv(f.fish)))))
+stds(f::FisherMatrix) = Dict(zip(f.names,sqrt.(diag(inv(f.fish)))))
 
 function +(f1::FisherMatrix, f2::FisherMatrix)
     names = collect(union(Set(f1.names),Set(f2.names)))
@@ -117,10 +117,17 @@ doc"""
 
 Get a Fisher matrix with some of the parameters held fixed.
 """
-function with_fixed(params,f::FisherMatrix)
+function with_fixed(params, f::FisherMatrix)
     ii = deleteat!(collect(1:length(f.names)),sort(indexin(params,f.names)))
     FisherMatrix(f.fish[ii,ii],f.names[ii])
 end
+
+
+function with_marged(params, f::FisherMatrix)
+    ii = deleteat!(collect(1:length(f.names)),sort(indexin(params,f.names)))
+    FisherMatrix(inv(inv(f.fish)[ii,ii]),f.names[ii])
+end
+
 
 prior(param,std::Real) = FisherMatrix(eye(1)/std^2,[param])
 
@@ -131,16 +138,17 @@ prior(param,std::Real) = FisherMatrix(eye(1)/std^2,[param])
 function like1d{Tnames,Tvals}(fish::FisherMatrix{Tvals,Tnames}, param::Tnames, center=0; kwargs...)
     like1d(center, stds(fish)[param]; kwargs...)
 end
-
+    
 function like2d{Tnames,Tvals}(fish::FisherMatrix{Tvals,Tnames}, param1::Tnames, param2::Tnames, center=(0,0); kwargs...)
     ii = indexin([param1,param2],fish.names)
     @assert !any(ii.==0) "Fisher doesn't contain both parameters $param1 and $param2"
     like2d(center, inv(fish.fish)[ii,ii]; kwargs...)
 end
 
-function like1d(μ,σ; σlim=4, color=nothing, kwargs...)
+function like1d(μ,σ; σlim=4, color=nothing, maxed=false, kwargs...)
     x = linspace(μ-4σ, μ+4σ,100)
-    plot(x,exp(-(x-μ).^2/2/σ^2); color=color, kwargs...)
+    A = maxed ? 1 : 1/√(2π)/σ
+    plot(x, @.(A*exp(-(x-μ)^2/2/σ^2)); color=color, kwargs...)
 end
 
 function like2d(μ,Σ; σs=1:2, σlim=1.618max(σs...), color=nothing, kwargs...)

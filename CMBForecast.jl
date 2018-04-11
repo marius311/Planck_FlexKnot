@@ -71,7 +71,7 @@ function get_cp(;lmax=2998, sigmoid=nothing, params...)
     
     params = Dict{Any,Any}(params)
     
-    @assert (:tau in keys(params)) $ (:fidxe in keys(params)) "Must provide one and only one_ of tau or fiducial reionization history"
+    @assert (:tau in keys(params)) ⊻ (:fidxe in keys(params)) "Must provide one and only one_ of tau or fiducial reionization history"
     
     #some basic derived parameters
     if ~(:H0 in keys(params))
@@ -119,7 +119,7 @@ function get_cp(;lmax=2998, sigmoid=nothing, params...)
         else
             xe = fidxe
         end
-        cp[:Reion][:set_xe](z=z,xe=xe)
+        cp[:Reion][:set_xe](z=z,xe=xe,smooth=1e-3)
     end
     
     return cp
@@ -147,7 +147,7 @@ function get_Cℓ(; lmax=2998, use_lensed_cls=false, params...)
     scls = r[Symbol("get_"*(use_lensed_cls ? "" : "un")*"lensed_scalar_cls")](lmax)[2:end,:]
     lcls = r[:get_lens_potential_cls](lmax)[2:end,:]
     
-    Cℓ = named_Cℓ_array(Array(Float64,(3,3,lmax)))
+    Cℓ = named_Cℓ_array(Array{Float64}((3,3,lmax)))
     for l in 1:lmax
         scale = 1e12 * cp[:TCMB]^2 * 2pi/l/(l+1)
         tt,ee,te    = [scale*scls[l,i] for i in [1,2,4]]
@@ -200,7 +200,7 @@ Combine several noise spectra according to optimal weighting.
 """
 function noise_add{T<:NamedArray}(Nℓs::T...)
     names = [(n.dicts,n.dimnames) for n in Nℓs]
-    @assert all(names[1].==names) "Can only call noise_add on same-shape noise spectra"
+    # @assert all(names[1].==names) "Can only call noise_add on same-shape noise spectra"
     NamedArray(mapslices(inv,sum([mapslices(inv,n.array,(1,2)) for n in Nℓs]),(1,2)),names[1]...)
 end
 noise_add{T<:Union{Base.Generator,AbstractArray}}(Nℓs::T) = noise_add(Nℓs...)
