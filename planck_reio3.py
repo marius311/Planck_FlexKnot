@@ -69,15 +69,15 @@ class CambReio(SlikPlugin):
                 assert mhfid, "--mhfid must be set if --mhprior is set"
                 self.mplus, self.mminus = (sum(self.modes * (xe_max-2*self.xe_fid) + x*xe_max*abs(self.modes),axis=1)/2/norm(self.modes,axis=1)**2 for x in [1,-1])
                 
-                support = ~all(self.modes==0,axis=0)
-                self.radius = sqrt(sum(support*abs(xe_max-self.xe_fid)**2) / sum(support))
+                self.support = support = ~all(self.modes==0,axis=0)
+                self.radius = sqrt(sum(support*(xe_max-self.xe_fid)**2) / sum(support))
 
             params.reiomodes = SlikDict()
             for i in range(nmodes):
                 p = params.reiomodes['mode%i'%i] = param(0,0.3 if "mh" in modesfile else 3)
-                if mhprior:
-                    p.min = self.mhprior*self.mminus[i]
-                    p.max = self.mhprior*self.mplus[i]
+                if mhprior and 'cube' in mhprior:
+                    p.min = self.mminus[i]
+                    p.max = self.mplus[i]
                 if 'binmodes' in modesfile:
                     p.min = 0
         
@@ -140,8 +140,9 @@ class CambReio(SlikPlugin):
             if any(m!=0):
                 self.xe = self.xe + dot(m,self.modes)
                 
-                if self.mhprior:
-                    if any(m < self.mhprior*self.mminus) or any(m > self.mhprior*self.mplus): raise BadXe()
+                if self.mhprior and 'cube' in self.mhprior:
+                    if any(m < self.mminus) or any(m > self.mplus): raise BadXe()
+                if self.mhprior and 'sphere' in self.mhprior:
                     if norm(m) > self.radius: raise BadXe()
                 
                 if self.hardxe:
@@ -242,7 +243,7 @@ class planck(SlikPlugin):
                  doplot=False,
                  noplotbadxe=False,
                  sampler='mh',
-                 mhprior=0,
+                 mhprior='cube_sphere',
                  mhfid=False,
                  mhfidbase=0.15,
                  hardxe='(-0.5,1.5)',
@@ -283,14 +284,16 @@ class planck(SlikPlugin):
             if lowp_lmin: run_id.append("lowplmin%s"%lowp_lmin)
             if highl!='plik_lite_v18_TT.clik': run_id.append(highl)
             if lensing: run_id.append('lensing')
-        if mhprior: run_id.append("mhprior"+(str(mhprior) if mhprior!=1 else ""))
-        if mhfid: run_id.append("mhfid")
-        if mhfidbase!=0.15: run_id.append("mhfidbase%.3i"%(int(1e2*mhfidbase)))
         if gpprior: run_id.append("gpprior")
         if tau_prior:
             run_id.append('taup%.3i%.3i'%(int(1e3*self.tau_prior[0]),int(1e3*self.tau_prior[1])))
         if sampler=='emcee': run_id.append('emcee')
-        if 'reiomodes' in model: run_id.append(osp.splitext(modesfile)[0])
+        if 'reiomodes' in model: 
+            run_id.append(osp.splitext(modesfile)[0])
+            if mhprior=='cube_sphere': run_id.append("mhprior")
+            elif mhprior: run_id.append("mhprior"+mhprior)
+            if mhfid: run_id.append("mhfid")
+            if mhfidbase!=0.15: run_id.append("mhfidbase%.3i"%(int(1e2*mhfidbase)))
         if undo_tau_prior:
             if isinstance(undo_tau_prior,str):
                 run_id.append("undo_"+osp.basename(undo_tau_prior).replace('.dat',''))
@@ -402,16 +405,18 @@ class planck(SlikPlugin):
                 )
             elif lowl in ['cvlowp','simlowlike']:
                 assert not lowp_lmin, "not implemented"
-                p0 = {k:(v if isinstance(v,(float,int)) else v.start) for k,v in self.cosmo.items() if k!="reiomodes"}
+                p0 = SlikDict({k:(v.start if isinstance(v,param) else v) for k,v in self.cosmo.items() if not isinstance(v,dict)})
+                camb = CambReio(p0,lmax=200,DoLensing=False,model='reiotanh')
                 p0["cosmomc_theta"] = p0["theta"]
                 p0["As"] = exp(p0["logA"])*1e-10
-                clEEobs = self.camb(**p0)["EE"]
+                p0["tau"] = 0.055
+                clEEobs = camb(**p0)["EE"]
                 if lowl=='simlowlike':
                     l = arange(100)
                     nlEEobs = (0.0143/l + 0.000279846) * l**2 / (2*pi)
                     fsky = 0.5
                 else:
-                    nlEEobs = 0
+                    nlEEobs = 0*clEEobs
                     fsky = 1
                 self.lowlP = CVLowP(clEEobs=clEEobs,nlEEobs=nlEEobs,fsky=fsky,lrange=(2,(int(lowp_lmax) if lowp_lmax else 30)+1))
             else:
@@ -487,7 +492,9 @@ class planck(SlikPlugin):
             
             self.lnls = SlikDict({k:nan for k in ['highl','lowlT','lowlP','inv_tau_prior','lensing']})
 
-                
+            #temp workaround for first step
+            self.cosmo.tau_out = nan 
+            
             self.cls = self.camb(background_only=background_only,**self.cosmo)
             
             self.cosmo.H0 = self.camb.H0
@@ -496,7 +503,7 @@ class planck(SlikPlugin):
             if (not background_only and 
                 (any([any(isnan(x)) for x in list(self.cls.values())])
                  or any([any(x>1e5) for x in list(self.cls.values())]))):
-                raise Exception("CAMB outputted crazy Cls")
+                raise BadXe("CAMB outputted crazy Cls")
             
             badxe = False
         except Exception as e:
