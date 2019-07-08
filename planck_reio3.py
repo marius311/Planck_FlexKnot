@@ -3,14 +3,14 @@ import os
 import os.path as osp
 from shutil import copytree, rmtree
 from tempfile import mkdtemp
-from scipy.optimize import brentq
-from scipy.interpolate import pchip_interpolate
-import dill as pickle
 
 import camb
+import dill as pickle
 from numpy import *
-from numpy.random import uniform
 from numpy.linalg import norm
+from numpy.random import uniform
+from scipy.interpolate import pchip_interpolate
+from scipy.optimize import brentq
 
 from cosmoslik import *
 
@@ -152,7 +152,7 @@ class CambReio(SlikPlugin):
                     if interp(6,self.z,self.xe) < (0.99 * 1+fHe): raise BadXe()
                 
                 if self.clip:
-                    self.xe = clip(self.xe,0,1.17)
+                    self.xe = clip(self.xe,0,1+fHe)
                     
                 self.xe = pchip2_interpolate(self.z,self.xe,self.z,nsmooth=30)
                 
@@ -264,7 +264,7 @@ class planck(SlikPlugin):
         
         model = model.split('_')
         assert all([x in ['lcdm','mnu','tau','nrun','r','reiotanh','reiomodes','reioknots','reioflexknots','reioflexknots2','ALens','fixA','fixclamp'] for x in model]), "Unrecognized model"
-        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
+        assert lowl in ['simlow','bflike','cvlowp','simlowlike','commander','lfi_EE'] or 'simlowlikeclik' in lowl or lowl.startswith('simall'), "Unrecognized lowl likelihood"
 
 
 
@@ -396,6 +396,10 @@ class planck(SlikPlugin):
                 self.lowlP = likelihoods.planck.clik(
                     clik_file='simall_100x143_offlike5_%s_Aplanck_B.clik'%(lowl.split('_')[1])
                 )
+            elif lowl == 'lfi_EE':
+                self.lowlP = likelihoods.planck.clik(
+                    clik_file='lfi_likelihood/lowl_70_dx12_QU.clik'
+                )
             elif lowl=='bflike':
                 if lowp_lmax or lowp_lmin: raise ValueError("bflike lmax not implemented")
                 IQUspec = 'QU' if only_lowp else 'SMW'
@@ -430,7 +434,7 @@ class planck(SlikPlugin):
             self.sampler = samplers.polychord(
                 self,
                 output_file = 'polychord/'+'_'.join(run_id),
-                output_extra_params = ['cosmo.tau_out', 'cosmo.H0'],
+                output_extra_params = ['cosmo.tau_out', 'cosmo.tau15_out', 'cosmo.H0'],
                 read_resume = False,
                 do_clustering = False,
                 nlive = 300
@@ -440,7 +444,7 @@ class planck(SlikPlugin):
                             'clTE':('clTE','(100,)d'),
                             'clEE':('clEE','(100,)d'),
                             'xe':('camb.xe_thin','(103,)d')}
-            _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee}[sampler]
+            _sampler = {'mh':samplers.metropolis_hastings, 'emcee':samplers.emcee, 'priors':samplers.priors}[sampler]
             self.sampler = _sampler(
                 self,
                 num_samples = 1e8,
@@ -448,15 +452,15 @@ class planck(SlikPlugin):
                 cov_est = covmat,
                 output_extra_params = [
                     'lnls.highl','lnls.lowlT','lnls.lowlP','lnls.inv_tau_prior','lnls.lensing',
-                    'cosmo.tau_out','cosmo.H0'
+                    'cosmo.tau_out','cosmo.tau15_out','cosmo.H0'
                 ] + ([extra_format[e] for e in extras.split(',')] if extras else [])
             )
-            if sampler=='mh':
+            if sampler in ['mh','priors']:
                 self.sampler.update(dict(
                     print_level = 1,
                     proposal_update_start = 500,
                     proposal_scale = 1.5,
-                    mpi_comm_freq = 5,
+                    mpi_comm_freq = 10 if sampler=='mh' else 100,
                 ))
             elif sampler=='emcee':
                 self.sampler.update(dict(
@@ -527,6 +531,7 @@ class planck(SlikPlugin):
             
             
         self.cosmo.tau_out = self.camb.results.get_tau()
+        self.cosmo.tau15_out = self.camb.results.get_tau(15,50)
 
         if not background_only: 
             self.clTT = self.cls['TT'][:100]
